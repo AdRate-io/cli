@@ -1,6 +1,8 @@
 # @adrate/cli 0.1.0 发布说明草案
 
-状态：本地发布准备中，尚未发布到 npm，外部 GitHub/npm/OpenResty/E2E 闸门仍为 blocked。
+本文覆盖整个 `0.1.0` release train。**该 train 的首个发布版本是 `0.1.0-beta.1`，dist-tag 为 `next`**——`npm i -g @adrate/cli` 不会装到它，需要显式 `@adrate/cli@next`。正式的 `0.1.0` 要等真实端到端验收、Windows 矩阵与 production 反代取证全部完成后才发布。
+
+状态：外部 GitHub/npm/OpenResty/E2E 闸门仍为 blocked。
 
 **第一版不支持 Accio connector。** 我们在检索范围内没有找到可据以实现和验证 custom Connector 的 manifest schema、device-code 字段与 validator，按"不猜接口"的原则没有做适配（这是对我们检索结果的说明，不是对 Accio 官方资料的判断）。两项 accio 闸门也不再是发布必需项，仍保留在名册中并维持 blocked。
 

@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "7f41e07a453a0d010a68cd8f5c4d2dfaea6fbe53",
-  "baseTargetCommit": "fb16113ee6719bb91f398a94fa1705e02d2dd1be",
+  "sourceCommit": "760d3128bf37167328bcc2744876a2e25764e987",
+  "baseTargetCommit": "20377a367679b01c99376643e4fb1daf959e088b",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -21,7 +21,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "9f75b3e7a641260d96e49c71c6368027781a9210ac79beda4b8940f7f3a2540c"
+      "sha256": "c043d59e7c7c05fe9c3f60f002aae6e62b9f8e73d53dade942fb7bac456062dd"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -41,7 +41,7 @@
     },
     {
       "path": "release/RELEASE_NOTES-0.1.0.md",
-      "sha256": "1752d8c1c9621ec0c4b52969215eb20fa19a4fa079c032c46c993c734f2fe691"
+      "sha256": "600c0702413aa44cf2fa0a45430749751950c06df5379a330fb11dfaf9d08e5b"
     },
     {
       "path": "release/trusted-evidence-pins.json",
@@ -465,7 +465,7 @@
     },
     {
       "path": "test/public-mirror.test.ts",
-      "sha256": "0c271ef263e0751a46a0ad7e987ca50c3032a18111cecba4afa6ffdaebce3642"
+      "sha256": "bcfcdd089494c8f49fdf6f6285097194ad9f45f78f12c6a6ad1469e76b010441"
     },
     {
       "path": "test/read-service.test.ts",

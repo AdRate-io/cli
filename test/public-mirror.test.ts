@@ -26,6 +26,12 @@ import {
 
 const execFileAsync = promisify(execFile)
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
+// 版本号与 channel 从真实 package.json 派生，避免每次升版本都要改这个测试。
+const CLI_VERSION = JSON.parse(
+  await readFile(join(CLI_ROOT, "package.json"), "utf8")
+).version as string
+const RELEASE_TAG = `v${CLI_VERSION}`
+const RELEASE_CHANNEL = CLI_VERSION.includes("-") ? "prerelease" : "stable"
 const EXPECTED_REMOTE = "https://github.com/AdRate-io/cli.git"
 const roots: Array<string> = []
 
@@ -493,7 +499,7 @@ describe("public mirror commit and apply gates", () => {
       await git(f.targetRoot, "add", ".")
       await git(f.targetRoot, "commit", "-m", "mirror release candidate")
       const releaseCommit = await git(f.targetRoot, "rev-parse", "HEAD")
-      await git(f.targetRoot, "tag", "v0.1.0")
+      await git(f.targetRoot, "tag", RELEASE_TAG)
       await writeFile(
         join(f.targetRoot, ".git/info/exclude"),
         "\nnode_modules\n",
@@ -534,11 +540,11 @@ describe("public mirror commit and apply gates", () => {
           "--local",
           "--require-clean",
           "--tag",
-          "v0.1.0",
+          RELEASE_TAG,
           "--commit",
           releaseCommit,
           "--channel",
-          "stable",
+          RELEASE_CHANNEL,
           "--artifact-dir",
           artifactDirectory,
         ],
@@ -551,7 +557,7 @@ describe("public mirror commit and apply gates", () => {
       expect(localGate.stdout).toBe("Local release gate PASS\n")
       expect(localGate.stderr).toBe("")
       expect((await readdir(artifactDirectory)).sort()).toStrictEqual([
-        "adrate-cli-0.1.0.tgz",
+        `adrate-cli-${CLI_VERSION}.tgz`,
         "release-artifact.json",
       ])
       await expect(collectMirrorSource(f.targetRoot)).resolves.toHaveLength(
