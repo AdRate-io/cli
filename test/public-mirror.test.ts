@@ -605,6 +605,33 @@ describe("public mirror commit and apply gates", () => {
         `adrate-cli-${CLI_VERSION}.tgz`,
         "release-artifact.json",
       ])
+
+      // 回归：产物清单的顺序必须与外部闸门的 EXPECTED_TARBALL_FILES 逐位
+      // 置相同（后者是按完整路径的默认 .sort()）。此前写清单用
+      // localeCompare、重建比对干脆不排序，三套顺序互不相同，导致外部闸门
+      // 永远拒收本地闸门刚产出的合法产物；而"本地产出 → 外部消费"这条串联
+      // 路径从未被端到端跑过，所以一直没暴露。
+      const artifactManifest = JSON.parse(
+        await readFile(join(artifactDirectory, "release-artifact.json"), "utf8")
+      ) as { files: Array<{ path: string }> }
+      expect(artifactManifest.files.map((file) => file.path)).toStrictEqual(
+        [
+          "README.md",
+          "dist/bin.d.ts",
+          "dist/bin.js",
+          "dist/bin.js.map",
+          "package.json",
+          "scripts/keychain-smoke.mjs",
+          "skills/adrate-ads/SKILL.md",
+          "skills/adrate-ads/agents/openai.yaml",
+          "skills/adrate-ads/skill-manifest.json",
+          "skills/adrate-shared/SKILL.md",
+          "skills/adrate-shared/agents/openai.yaml",
+          "skills/adrate-shared/skill-manifest.json",
+          "skills-content/adrate-ads/SKILL.md",
+          "skills-content/adrate-shared/SKILL.md",
+        ].sort()
+      )
       await expect(collectMirrorSource(f.targetRoot)).resolves.toHaveLength(
         plan.files.length
       )

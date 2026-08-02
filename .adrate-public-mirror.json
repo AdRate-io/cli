@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "47cdbf8efa02ecdabb7801c33d28757dd8bfb9da",
-  "baseTargetCommit": "81083194818eea991969e4141a2cb369ccd3fa85",
+  "sourceCommit": "8fbb2b635e05095b47ced37aaf026b4951face31",
+  "baseTargetCommit": "5e4fb116790ee0bc221c78fb8c3726bdcbde10ae",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -81,7 +81,7 @@
     },
     {
       "path": "scripts/release-gate.mjs",
-      "sha256": "945fb510c12c7b99d868cd15ab2cbee0479d199638f577ab9428de55d16ecfec"
+      "sha256": "8b2500861e8914d25ba3a9e7a353f58364462cfa7b37d597a600b29ed69cb61c"
     },
     {
       "path": "scripts/skill-assets-contract.d.mts",
@@ -481,7 +481,7 @@
     },
     {
       "path": "test/public-mirror.test.ts",
-      "sha256": "a5d97054dda71d0e783fc88f8d89ead4be9fd78b5392e7e96d0d0700cbd5af07"
+      "sha256": "3296e89fe04b7741465ce7b0e19309e95417738312deef3af3e92203b8c2db47"
     },
     {
       "path": "test/read-service.test.ts",

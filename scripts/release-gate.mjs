@@ -927,14 +927,27 @@ async function tarballEntries(tarball) {
     .sort()
 }
 
+/**
+ * 包内路径的唯一排序口径：按完整路径做 UTF-16 码位比较。
+ *
+ * 必须与 EXPECTED_TARBALL_FILES 的默认 `.sort()` 完全一致，否则外部闸门
+ * 会拒收本地闸门刚产出的合法产物。不能用 localeCompare：它的结果依赖运行
+ * 环境 locale（本地能过、CI 过不了），且 "skills-content/..." 与
+ * "skills/..." 在两种口径下相对顺序相反（'-'=45 < '/'=47，但按目录逐层
+ * 排序时 "skills" 作为更短前缀反而在前）。
+ */
+function comparePackagePath(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 async function extractAndHash(tarball, destination) {
   await mkdir(destination, { recursive: true })
   await execFileAsync("tar", ["-xzf", tarball, "-C", destination])
   const packageRoot = resolve(destination, "package")
-  const result = new Map()
+  const collected = []
   async function visit(directory) {
     const entries = await readdir(directory, { withFileTypes: true })
-    entries.sort((left, right) => left.name.localeCompare(right.name))
+    entries.sort((left, right) => comparePackagePath(left.name, right.name))
     for (const entry of entries) {
       const path = resolve(directory, entry.name)
       if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
@@ -945,12 +958,14 @@ async function extractAndHash(tarball, destination) {
         const relativePath = toPosix(relative(packageRoot, path))
         const content = await readFile(path)
         assertNoSecret(relativePath, content)
-        result.set(relativePath, sha256(content))
+        collected.push([relativePath, sha256(content)])
       }
     }
   }
   await visit(packageRoot)
-  return { packageRoot, hashes: result }
+  // 目录逐层遍历得不到按完整路径的全局顺序，必须在这里统一重排。
+  collected.sort(([left], [right]) => comparePackagePath(left, right))
+  return { packageRoot, hashes: new Map(collected) }
 }
 
 async function assertPackedPackage(packageRoot, expectedVersion) {
@@ -1039,8 +1054,10 @@ async function persistReleaseArtifact(
     commit: identity.commit,
     tarball: filename,
     sha256: digest,
+    // extractAndHash 已按 comparePackagePath 全局排序；这里再排一次是
+    // 防御性的，且必须用同一个比较器，不能退回 localeCompare。
     files: [...hashes]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => comparePackagePath(left, right))
       .map(([path, fileSha256]) => ({ path, sha256: fileSha256 })),
   }
   await writeFile(
