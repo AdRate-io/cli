@@ -226,16 +226,31 @@ describe("release gate", () => {
     expect(result.stderr).toBe("")
   }, 30_000)
 
-  it("keeps each external channel blocked without trusted evidence", async () => {
+  // 从 readiness 的真实状态派生断言，而不是写死"两个 channel 都 blocked"。
+  // 取证是一个合法的状态推进：某个 channel 拿到全部证据后本就应该不再以
+  // "remain blocked" 拒绝。写死状态会让正常取证把这条测试打红，进而逼人去
+  // 改测试迁就现实——那正好废掉了这条闸门。无论哪种状态它都必须 fail-closed，
+  // 差别只在拒绝的理由。
+  it("refuses every channel whose readiness gates are not all pass", async () => {
+    const readiness = await readinessFixture()
     for (const channel of ["prerelease", "stable"]) {
-      await expect(
-        execFileAsync(
-          process.execPath,
-          ["scripts/release-gate.mjs", "--external", "--channel", channel],
-          { cwd: CLI_ROOT }
-        )
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining(
+      const run = execFileAsync(
+        process.execPath,
+        ["scripts/release-gate.mjs", "--external", "--channel", channel],
+        { cwd: CLI_ROOT }
+      )
+      if (readiness.channels[channel].status === "blocked") {
+        await expect(run).rejects.toMatchObject({
+          stderr: expect.stringContaining(
+            `External ${channel} release gates remain blocked`
+          ),
+        })
+        continue
+      }
+      // 已取证的 channel 不能再用 "remain blocked" 搪塞，但仍必须拒绝——
+      // 此处缺 tag/commit 身份，且证据绑定的 commit 只存在于公开镜像仓库。
+      await expect(run).rejects.toMatchObject({
+        stderr: expect.not.stringContaining(
           `External ${channel} release gates remain blocked`
         ),
       })

@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "bec630117ad24162af661d27fdf5ea6583999a40",
-  "baseTargetCommit": "33a8bcde5ab62affc6e3ac6b71fcb8ecbf63323f",
+  "sourceCommit": "47eac40faf2cd0eb147ef91435be86f7f67b712d",
+  "baseTargetCommit": "8d8fb41fdfd40058d7db1384653d4914514fc4b1",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -473,7 +473,7 @@
     },
     {
       "path": "test/release-gate.test.ts",
-      "sha256": "03773aaaa8a9a1e0fb0f6a51426c527cf06c47072feaeaa4cfa9c20499d63fdc"
+      "sha256": "6d6aa9d54d7c5c6b760456ca4e65ef142b1998e3eaa5dde3c11f09074af09e1b"
     },
     {
       "path": "test/resource-input.test.ts",
