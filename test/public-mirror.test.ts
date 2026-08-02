@@ -363,6 +363,51 @@ describe("public mirror commit and apply gates", () => {
     )
   }, 30_000)
 
+  // 回归：此前所有 apply 测试都只覆盖 bootstrap（目标空树，git status 全是
+  // "??" 无前导空格），增量 apply 的正向路径一次都没测过。而 verifyAppliedTree
+  // 用经过 trim 的 status 逐行 slice(3)，会吃掉第一行的前导空格；manifest 以
+  // "." 开头必然排首行且增量时必为 " M"，于是每次增量 apply 都被误判为非法
+  // worktree 变更。这条测试固定"增量 apply 必须成功"。
+  it("applies an incremental mirror update on top of a committed mirror", async () => {
+    const f = await fixture()
+    const initialPlan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: f.sourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: f.targetCommit,
+    })
+    await applyMirrorPlan(initialPlan)
+    await git(f.targetRoot, "add", "-A")
+    await git(f.targetRoot, "commit", "-m", "bootstrap mirror")
+    const mirroredCommit = await git(f.targetRoot, "rev-parse", "HEAD")
+
+    const updatedReadme = "# incremental mirror update\n"
+    await writeFile(join(f.sourceRoot, "README.md"), updatedReadme)
+    await git(f.privateRepository, "add", "cli")
+    await git(f.privateRepository, "commit", "-m", "update readme")
+    const nextSourceCommit = await git(f.privateRepository, "rev-parse", "HEAD")
+
+    const incrementalPlan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: nextSourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: mirroredCommit,
+    })
+    expect(incrementalPlan.summary.updated).toContain("README.md")
+
+    // 修复前这里抛 "Mirror apply produced an unexpected worktree change"。
+    await expect(applyMirrorPlan(incrementalPlan)).resolves.toBeUndefined()
+
+    expect(await readFile(join(f.targetRoot, "README.md"), "utf8")).toBe(
+      updatedReadme
+    )
+    const manifest = JSON.parse(
+      await readFile(join(f.targetRoot, ".adrate-public-mirror.json"), "utf8")
+    ) as { sourceCommit: string; baseTargetCommit: string }
+    expect(manifest.sourceCommit).toBe(nextSourceCommit)
+    expect(manifest.baseTargetCommit).toBe(mirroredCommit)
+  }, 30_000)
+
   it("requires the exact production GitHub origin", async () => {
     const f = await fixture()
     await git(

@@ -728,11 +728,22 @@ async function verifyAppliedTree(plan, manifest, rootIdentity) {
     throw new Error("Mirror manifest verification failed after atomic write.")
   }
   const allowedDirty = new Set(expectedPaths)
-  const status = await git(plan.targetRoot, [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-  ])
+  // 这里必须读未经 trim 的原始 stdout：porcelain v1 的修改行形如 " M path"，
+  // 首字符是空格。git() 会 trim 掉整段输出的首尾空白，从而吃掉第一行的前导
+  // 空格，使随后的 slice(3) 多切一个字符。由于 manifest 以 "." 开头必然排在
+  // 首行、且增量同步时必然是修改态，一旦 trim 就会把它误判成非法路径，导致
+  // 每一次增量 apply 都失败（bootstrap 时全是 "??" 无前导空格，故未暴露）。
+  const { stdout: status } = await execFileAsync(
+    "git",
+    [
+      "-C",
+      plan.targetRoot,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+    ],
+    { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }
+  )
   for (const line of status.split("\n").filter(Boolean)) {
     const path = line.slice(3)
     if (path.includes(" -> ") || !allowedDirty.has(path)) {

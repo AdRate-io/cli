@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "760d3128bf37167328bcc2744876a2e25764e987",
-  "baseTargetCommit": "20377a367679b01c99376643e4fb1daf959e088b",
+  "sourceCommit": "bec630117ad24162af661d27fdf5ea6583999a40",
+  "baseTargetCommit": "33a8bcde5ab62affc6e3ac6b71fcb8ecbf63323f",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -21,7 +21,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "c043d59e7c7c05fe9c3f60f002aae6e62b9f8e73d53dade942fb7bac456062dd"
+      "sha256": "964df0f744054de28d67ee54a4af763f11006a60d66f686fc1ea7a1e27e3859f"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -33,7 +33,7 @@
     },
     {
       "path": "release/external-readiness.json",
-      "sha256": "ee0b7e96faa22bff1f14996d3cab6f123a6d6896579d152f919594d923d98da4"
+      "sha256": "d21d8f8e968d6ec990d334d74fd9c209498da159f1e38c56a77869ce4aa27620"
     },
     {
       "path": "release/README.md",
@@ -57,7 +57,7 @@
     },
     {
       "path": "scripts/public-mirror.mjs",
-      "sha256": "a61027e1eed7fbffd81a572f59c16b78a34d4e0a93826b08e690c57f9e6b740d"
+      "sha256": "ec7b258c09df371a62eff33b364d8b8d05c3402ca436e01a9a2f50555435208d"
     },
     {
       "path": "scripts/release-gate.d.mts",
@@ -465,7 +465,7 @@
     },
     {
       "path": "test/public-mirror.test.ts",
-      "sha256": "bcfcdd089494c8f49fdf6f6285097194ad9f45f78f12c6a6ad1469e76b010441"
+      "sha256": "a5d97054dda71d0e783fc88f8d89ead4be9fd78b5392e7e96d0d0700cbd5af07"
     },
     {
       "path": "test/read-service.test.ts",
