@@ -1,10 +1,26 @@
 {
   "formatVersion": 1,
   "pins": {
-    "github-public-mirror": null,
-    "npm-bootstrap-and-2fa": null,
-    "npm-trusted-publisher": null,
-    "openresty-test": null,
+    "github-public-mirror": {
+      "sha256": "ac2149cc008e5a7d4dc4d962b1231edc81478f8a0006e4c7144373f8f0a4d4bf",
+      "issuer": "adrate-release-review-board",
+      "environment": "github-production"
+    },
+    "npm-bootstrap-and-2fa": {
+      "sha256": "f34740cae3e7cc261e8aed6d498580c457ae45ff927e7f3109a2321742b59da4",
+      "issuer": "adrate-release-review-board",
+      "environment": "npm-production"
+    },
+    "npm-trusted-publisher": {
+      "sha256": "cb669d1e1739a8ba8d5537dd9eafbf1c20c9f3ec90d2bfe8cf2033dfe35d69ea",
+      "issuer": "adrate-release-review-board",
+      "environment": "npm-production"
+    },
+    "openresty-test": {
+      "sha256": "1dfd5f2f163dec102bafb6236074c23724976fce2b9c98724a6f21dbe7a0f608",
+      "issuer": "adrate-release-review-board",
+      "environment": "openresty-test"
+    },
     "openresty-production": null,
     "accio-official-connector": null,
     "real-cli-e2e": null,

@@ -1,9 +1,9 @@
 {
   "formatVersion": 2,
-  "checkedAt": "2026-08-01T00:00:00.000Z",
+  "checkedAt": "2026-08-02T14:33:05.339Z",
   "channels": {
     "prerelease": {
-      "status": "blocked",
+      "status": "pass",
       "requiredGateIds": [
         "github-public-mirror",
         "npm-bootstrap-and-2fa",
@@ -27,31 +27,43 @@
   "gates": [
     {
       "id": "github-public-mirror",
-      "status": "blocked",
+      "status": "pass",
       "owner": "Boss",
-      "evidence": null,
-      "blockingReason": "AdRate-io/cli 真实远端、保护规则、镜像首个提交和回滚权限尚未验收。"
+      "evidence": {
+        "path": "release/evidence/github-public-mirror.json",
+        "sha256": "ac2149cc008e5a7d4dc4d962b1231edc81478f8a0006e4c7144373f8f0a4d4bf"
+      },
+      "blockingReason": null
     },
     {
       "id": "npm-bootstrap-and-2fa",
-      "status": "blocked",
+      "status": "pass",
       "owner": "Boss",
-      "evidence": null,
-      "blockingReason": "包首次创建、owner 与 org 2FA enforcement、最小发布权限尚未在 npm 真实账户验收。"
+      "evidence": {
+        "path": "release/evidence/npm-bootstrap-and-2fa.json",
+        "sha256": "f34740cae3e7cc261e8aed6d498580c457ae45ff927e7f3109a2321742b59da4"
+      },
+      "blockingReason": null
     },
     {
       "id": "npm-trusted-publisher",
-      "status": "blocked",
+      "status": "pass",
       "owner": "Boss",
-      "evidence": null,
-      "blockingReason": "Trusted Publisher 尚未精确绑定 AdRate-io/cli、publish.yml 与 npm-production environment。"
+      "evidence": {
+        "path": "release/evidence/npm-trusted-publisher.json",
+        "sha256": "cb669d1e1739a8ba8d5537dd9eafbf1c20c9f3ec90d2bfe8cf2033dfe35d69ea"
+      },
+      "blockingReason": null
     },
     {
       "id": "openresty-test",
-      "status": "blocked",
+      "status": "pass",
       "owner": "Boss",
-      "evidence": null,
-      "blockingReason": "test 环境的 route/Host、trusted CIDR、内部 IP 头覆盖、源站防绕过和 110 秒 timeout 尚未实测。"
+      "evidence": {
+        "path": "release/evidence/openresty-test.json",
+        "sha256": "1dfd5f2f163dec102bafb6236074c23724976fce2b9c98724a6f21dbe7a0f608"
+      },
+      "blockingReason": null
     },
     {
       "id": "openresty-production",
