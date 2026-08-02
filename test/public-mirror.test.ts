@@ -1,0 +1,601 @@
+import { execFile } from "node:child_process"
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { tmpdir } from "node:os"
+import { dirname, join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
+import { afterEach, describe, expect, it } from "vitest"
+import {
+  applyMirrorPlan,
+  collectMirrorSource,
+  createMirrorPlan,
+  isAllowedMirrorPath,
+} from "../scripts/public-mirror.mjs"
+
+const execFileAsync = promisify(execFile)
+const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
+const EXPECTED_REMOTE = "https://github.com/AdRate-io/cli.git"
+const roots: Array<string> = []
+
+afterEach(async () => {
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true }))
+  )
+})
+
+async function git(
+  repository: string,
+  ...args: Array<string>
+): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", repository, ...args], {
+    encoding: "utf8",
+  })
+  return stdout.trim()
+}
+
+async function initializeRepository(repository: string) {
+  await mkdir(repository, { recursive: true })
+  await execFileAsync("git", ["init", "--initial-branch=main", repository])
+  await git(repository, "config", "user.email", "mirror-test@adrate.local")
+  await git(repository, "config", "user.name", "AdRate Mirror Test")
+}
+
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "adrate-public-mirror-test-"))
+  roots.push(root)
+  const privateRepository = join(root, "private")
+  const sourceRoot = join(privateRepository, "cli")
+  const targetRoot = join(root, "public")
+  await initializeRepository(privateRepository)
+  await cp(CLI_ROOT, sourceRoot, {
+    recursive: true,
+    filter(source) {
+      const path = relative(CLI_ROOT, source).replaceAll("\\", "/")
+      return !(
+        path === "dist" ||
+        path.startsWith("dist/") ||
+        path === ".git" ||
+        path.startsWith(".git/") ||
+        path === "node_modules" ||
+        path.startsWith("node_modules/") ||
+        path === ".adrate-public-mirror.json" ||
+        path.endsWith(".tgz")
+      )
+    },
+  })
+  await git(privateRepository, "add", "cli")
+  await git(privateRepository, "commit", "-m", "private source")
+  const sourceCommit = await git(privateRepository, "rev-parse", "HEAD")
+
+  await initializeRepository(targetRoot)
+  await git(targetRoot, "remote", "add", "origin", EXPECTED_REMOTE)
+  await git(targetRoot, "commit", "--allow-empty", "-m", "public base")
+  const targetCommit = await git(targetRoot, "rev-parse", "HEAD")
+  return {
+    root,
+    privateRepository,
+    sourceRoot,
+    sourceCommit,
+    targetRoot,
+    targetCommit,
+  }
+}
+
+type MirrorFile = { path: string; sha256: string; content: Buffer }
+
+async function materializeTracked(root: string, tracked: Map<string, Buffer>) {
+  for (const [path, content] of tracked) {
+    await mkdir(dirname(join(root, path)), { recursive: true })
+    await writeFile(join(root, path), content)
+  }
+}
+
+async function writeMirrorManifest(
+  root: string,
+  baseTargetCommit: string,
+  tracked: Map<string, Buffer>
+) {
+  const files = [...tracked]
+    .map(([path, content]) => ({
+      path,
+      sha256: createHash("sha256").update(content).digest("hex"),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path))
+  await writeFile(
+    join(root, ".adrate-public-mirror.json"),
+    `${JSON.stringify(
+      {
+        formatVersion: 1,
+        sourceCommit: "a".repeat(40),
+        baseTargetCommit,
+        files,
+      },
+      null,
+      2
+    )}\n`
+  )
+}
+
+/** 复刻一个"镜像工具刚写完并被维护者正常提交"的公开仓库。 */
+async function syntheticMirrorTarget(source: Array<MirrorFile>) {
+  const root = await mkdtemp(join(tmpdir(), "adrate-mirror-manual-"))
+  roots.push(root)
+  await initializeRepository(root)
+  await git(root, "remote", "add", "origin", EXPECTED_REMOTE)
+  await git(root, "commit", "--allow-empty", "-m", "public base")
+  const base = await git(root, "rev-parse", "HEAD")
+  const tracked = new Map(source.map((file) => [file.path, file.content]))
+  await materializeTracked(root, tracked)
+  await writeMirrorManifest(root, base, tracked)
+  await git(root, "add", "-A")
+  await git(root, "commit", "-m", "mirror commit")
+  return { root, tracked, mirrorCommit: await git(root, "rev-parse", "HEAD") }
+}
+
+describe("public mirror policy", () => {
+  it("accepts the complete current public source and rejects widened paths", async () => {
+    const files = await collectMirrorSource(CLI_ROOT)
+    const paths = files.map((file) => file.path)
+    expect(paths).toContain(".github/workflows/publish.yml")
+    expect(paths).toContain("scripts/public-mirror.mjs")
+    expect(paths).toContain("integrations/accio/validation.json")
+    expect(paths).toContain("release/trusted-evidence-pins.json")
+    expect(paths).not.toContain("dist/bin.js")
+    expect(paths.some((path) => path.startsWith("node_modules/"))).toBe(false)
+    expect(isAllowedMirrorPath("src/bin.ts")).toBe(true)
+    expect(
+      isAllowedMirrorPath("release/evidence/github-public-mirror.json")
+    ).toBe(true)
+    expect(isAllowedMirrorPath("release/trusted-evidence-pins.json")).toBe(true)
+    expect(isAllowedMirrorPath("release/unreviewed.json")).toBe(false)
+    expect(isAllowedMirrorPath("release/evidence/unreviewed-gate.json")).toBe(
+      false
+    )
+    expect(isAllowedMirrorPath("skills/unknown/SKILL.md")).toBe(false)
+    expect(isAllowedMirrorPath("private-main-site.ts")).toBe(false)
+    // 信任根刻意用 branch ruleset 而非 CODEOWNERS：三个合法位置都在 allowlist 之外，
+    // 放进公开仓库会直接触发闭世界阻断。LICENSE 同理，且它还会被 npm 无条件打进
+    // tarball，新增必须重签精确 14 项合同。见 release/README.md。
+    for (const forbidden of [
+      "CODEOWNERS",
+      "docs/CODEOWNERS",
+      ".github/CODEOWNERS",
+      "LICENSE",
+    ]) {
+      expect(isAllowedMirrorPath(forbidden)).toBe(false)
+    }
+    for (const unsafe of [
+      "src/a b.ts",
+      "src/a\tb.ts",
+      "src/a\u0000b.ts",
+      "src/./a.ts",
+      "src/../a.ts",
+      "src/a/..",
+      "src//a.ts",
+    ]) {
+      expect(() => isAllowedMirrorPath(unsafe)).toThrow(
+        "Mirror path escaped its root"
+      )
+    }
+  })
+
+  /**
+   * release/README.md 的"单向镜像"一节给出了公开仓库手工提交的分层阻断表，
+   * 而那份 runbook 既不在 assertDocumentation 的冻结文本内，又被 release gate
+   * 显式允许在已测候选之后变更。这条用例把表里四行逐条钉成有测试守护的合同：
+   * 报错串或先后顺序被改动时必须在这里先红，runbook 不会静默变成错误指引。
+   */
+  it("按层级钉死公开仓库手工提交的实际阻断点", async () => {
+    const source = (await collectMirrorSource(CLI_ROOT)) as Array<MirrorFile>
+
+    // 第 1 行：镜像工具写出并正常提交的自洽状态，工具完全放行。
+    const clean = await syntheticMirrorTarget(source)
+    await expect(collectMirrorSource(clean.root)).resolves.toHaveLength(
+      source.length
+    )
+
+    // 第 2 行：手工提交但未重签 manifest —— 父子闭合检查先行拦下。
+    // 这里刻意断言的是"父提交/base"这条，而不是 manifest-commit 那条：
+    // 手工提交让 HEAD 的父变成上一次镜像提交，而 manifest 记录的 base 更早。
+    const noResign = await syntheticMirrorTarget(source)
+    await writeFile(join(noResign.root, "LICENSE"), "MIT\n")
+    await git(noResign.root, "add", "-A")
+    await git(noResign.root, "commit", "-m", "hand-added LICENSE")
+    await expect(collectMirrorSource(noResign.root)).rejects.toThrow(
+      "Target mirror commit is not the direct child of its recorded base commit."
+    )
+
+    // 第 3 行：手工提交且自洽重签，但引入 allowlist 之外路径 —— manifest 校验拦下。
+    const outside = await syntheticMirrorTarget(source)
+    outside.tracked.set("LICENSE", Buffer.from("MIT\n"))
+    await materializeTracked(outside.root, outside.tracked)
+    await writeMirrorManifest(
+      outside.root,
+      outside.mirrorCommit,
+      outside.tracked
+    )
+    await git(outside.root, "add", "-A")
+    await git(outside.root, "commit", "-m", "hand-added LICENSE, re-signed")
+    await expect(collectMirrorSource(outside.root)).rejects.toThrow(
+      "Target mirror manifest is invalid."
+    )
+
+    // 第 4 行：手工提交且自洽重签，只动 allowlist 内路径 —— 工具不阻断。
+    // 这条断言的是一个已知缺口：唯一防线是 branch ruleset，不是本脚本。
+    // 若将来工具真的能拦住它，这里会失败，届时必须同步更新 runbook 那张表。
+    const inside = await syntheticMirrorTarget(source)
+    inside.tracked.set(
+      "release/README.md",
+      Buffer.from("hand edited runbook\n")
+    )
+    await materializeTracked(inside.root, inside.tracked)
+    await writeMirrorManifest(inside.root, inside.mirrorCommit, inside.tracked)
+    await git(inside.root, "add", "-A")
+    await git(inside.root, "commit", "-m", "hand-edited runbook, re-signed")
+    await expect(collectMirrorSource(inside.root)).resolves.toHaveLength(
+      source.length
+    )
+  }, 60_000)
+
+  it("rejects sensitive filenames before reading and credential-shaped content", async () => {
+    const root = await mkdtemp(join(tmpdir(), "adrate-mirror-secret-"))
+    roots.push(root)
+    await writeFile(join(root, ".env"), "should-not-be-read", { mode: 0o000 })
+    await expect(collectMirrorSource(root)).rejects.toThrow(
+      "outside the mirror allowlist"
+    )
+
+    await rm(join(root, ".env"))
+    await mkdir(join(root, "src"))
+    await writeFile(
+      join(root, "src", "leak.ts"),
+      `export const leaked = ${JSON.stringify(`npm_${"A".repeat(40)}`)}\n`
+    )
+    await expect(collectMirrorSource(root)).rejects.toThrow(
+      "Mirror secret scan rejected"
+    )
+  })
+})
+
+describe("public mirror commit and apply gates", () => {
+  it("uses captured bytes, closes the manifest ancestry, and rejects plan/apply races", async () => {
+    const f = await fixture()
+    const sourceReadme = await readFile(join(f.sourceRoot, "README.md"))
+    const initialPlan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: f.sourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: f.targetCommit,
+      testHooks: {
+        afterSourceCheckoutValidated: async () => {
+          await writeFile(
+            join(f.sourceRoot, "README.md"),
+            "unapproved source read race\n"
+          )
+        },
+      },
+    })
+    expect(initialPlan.summary.added.length).toBeGreaterThan(100)
+    expect(initialPlan.summary.updated).toStrictEqual([])
+    expect(initialPlan.summary.removed).toStrictEqual([])
+    expect(
+      initialPlan.files.find((file) => file.path === "README.md")?.content
+    ).toStrictEqual(sourceReadme)
+
+    // Source can change after planning; apply must write only approved captured bytes.
+    const targetIndexBeforeApply = await git(f.targetRoot, "write-tree")
+    await applyMirrorPlan(initialPlan)
+    expect(await git(f.targetRoot, "write-tree")).toBe(targetIndexBeforeApply)
+    expect(await readFile(join(f.targetRoot, "README.md"))).toStrictEqual(
+      sourceReadme
+    )
+    const manifest = JSON.parse(
+      await readFile(join(f.targetRoot, ".adrate-public-mirror.json"), "utf8")
+    ) as {
+      sourceCommit: string
+      baseTargetCommit: string
+      files: Array<{ path: string; sha256: string }>
+    }
+    expect(manifest.sourceCommit).toBe(f.sourceCommit)
+    expect(manifest.baseTargetCommit).toBe(f.targetCommit)
+    expect(manifest.files).toHaveLength(initialPlan.files.length)
+
+    await git(f.targetRoot, "add", ".")
+    await git(f.targetRoot, "commit", "-m", "mirror private source")
+    const mirroredTargetCommit = await git(f.targetRoot, "rev-parse", "HEAD")
+    await writeFile(join(f.sourceRoot, "README.md"), sourceReadme)
+
+    const nextPlan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: f.sourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: mirroredTargetCommit,
+    })
+    expect(nextPlan.summary.added).toStrictEqual([])
+    expect(nextPlan.summary.updated).toStrictEqual([])
+    expect(nextPlan.summary.removed).toStrictEqual([])
+    expect(nextPlan.summary.unchanged).toHaveLength(initialPlan.files.length)
+
+    const readmePath = join(f.targetRoot, "README.md")
+    await writeFile(readmePath, "unapproved target race\n")
+    await expect(applyMirrorPlan(nextPlan)).rejects.toThrow(
+      "Target checkout is not clean"
+    )
+    await writeFile(readmePath, sourceReadme)
+
+    const tamperedPlan = {
+      ...nextPlan,
+      files: nextPlan.files.map((file, index) =>
+        index === 0 ? { ...file, content: Buffer.from("tampered") } : file
+      ),
+    }
+    await expect(applyMirrorPlan(tamperedPlan)).rejects.toThrow(
+      "content or digest is invalid"
+    )
+    await expect(
+      applyMirrorPlan({ ...nextPlan, sourceCommit: "not-a-commit" })
+    ).rejects.toThrow("source commit is invalid")
+    await expect(
+      applyMirrorPlan({ ...nextPlan, files: [...nextPlan.files].reverse() })
+    ).rejects.toThrow("canonical order")
+
+    await git(f.targetRoot, "commit", "--allow-empty", "-m", "target race")
+    await expect(applyMirrorPlan(nextPlan)).rejects.toThrow(
+      "HEAD does not match"
+    )
+  }, 30_000)
+
+  it("requires the exact production GitHub origin", async () => {
+    const f = await fixture()
+    await git(
+      f.targetRoot,
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/AdRate-io/cli"
+    )
+    await expect(
+      createMirrorPlan({
+        sourceRoot: f.sourceRoot,
+        sourceCommit: f.sourceCommit,
+        targetRoot: f.targetRoot,
+        targetCommit: f.targetCommit,
+      })
+    ).resolves.toMatchObject({ sourceCommit: f.sourceCommit })
+
+    for (const remote of [
+      "https://github.com:443/AdRate-io/cli",
+      "https://user@github.com/AdRate-io/cli.git",
+      "https://github.com/AdRate-io/cli.git?ref=main",
+      "https://github.com/AdRate-io/cli.git#main",
+      "https://github.com/AdRate-io/cli/extra",
+      "https://github.com/AdRate-io/cli.git/",
+      "https://github.com/AdRate-io/cli-lookalike.git",
+      "https://github.example/AdRate-io/cli.git",
+      "git@github.com:AdRate-io/cli.git",
+      "ssh://git@github.com/AdRate-io/cli.git",
+      "https://github.com/attacker/cli.git",
+    ]) {
+      await git(f.targetRoot, "remote", "set-url", "origin", remote)
+      await expect(
+        createMirrorPlan({
+          sourceRoot: f.sourceRoot,
+          sourceCommit: f.sourceCommit,
+          targetRoot: f.targetRoot,
+          targetCommit: f.targetCommit,
+        })
+      ).rejects.toThrow("origin does not exactly match")
+    }
+  }, 30_000)
+
+  it("rejects executable Git blobs even when their path is allowlisted", async () => {
+    const f = await fixture()
+    await chmod(join(f.sourceRoot, "src/bin.ts"), 0o755)
+    await git(f.privateRepository, "add", "cli/src/bin.ts")
+    await git(f.privateRepository, "commit", "-m", "make source executable")
+    const executableCommit = await git(f.privateRepository, "rev-parse", "HEAD")
+
+    await expect(
+      createMirrorPlan({
+        sourceRoot: f.sourceRoot,
+        sourceCommit: executableCommit,
+        targetRoot: f.targetRoot,
+        targetCommit: f.targetCommit,
+      })
+    ).rejects.toThrow("unsupported Git object")
+  })
+
+  it("rejects a source-history rollback after a newer private commit was mirrored", async () => {
+    const f = await fixture()
+    const oldSourceCommit = f.sourceCommit
+    await writeFile(join(f.sourceRoot, "README.md"), "newer approved source\n")
+    await git(f.privateRepository, "add", "cli/README.md")
+    await git(f.privateRepository, "commit", "-m", "newer source")
+    const newerSourceCommit = await git(
+      f.privateRepository,
+      "rev-parse",
+      "HEAD"
+    )
+    const plan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: newerSourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: f.targetCommit,
+    })
+    await applyMirrorPlan(plan)
+    await git(f.targetRoot, "add", ".")
+    await git(f.targetRoot, "commit", "-m", "mirror newer source")
+    const mirroredCommit = await git(f.targetRoot, "rev-parse", "HEAD")
+
+    await git(f.privateRepository, "checkout", "--detach", oldSourceCommit)
+    await expect(
+      createMirrorPlan({
+        sourceRoot: f.sourceRoot,
+        sourceCommit: oldSourceCommit,
+        targetRoot: f.targetRoot,
+        targetCommit: mirroredCommit,
+      })
+    ).rejects.toThrow("roll back the public source history")
+  }, 30_000)
+
+  it("does not follow a target parent symlink race or mutate the target index", async () => {
+    const f = await fixture()
+    const plan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      sourceCommit: f.sourceCommit,
+      targetRoot: f.targetRoot,
+      targetCommit: f.targetCommit,
+    })
+    const outside = join(f.root, "outside")
+    await mkdir(outside)
+    await writeFile(join(outside, "sentinel"), "outside remains untouched\n")
+    const indexBefore = await git(f.targetRoot, "write-tree")
+
+    await expect(
+      applyMirrorPlan(plan, {
+        testHooks: {
+          beforeTargetPatchApply: async () => {
+            await symlink(outside, join(f.targetRoot, ".github"), "dir")
+          },
+        },
+      })
+    ).rejects.toThrow()
+    expect(await readFile(join(outside, "sentinel"), "utf8")).toBe(
+      "outside remains untouched\n"
+    )
+    expect(await readdir(outside)).toStrictEqual(["sentinel"])
+    expect(await git(f.targetRoot, "write-tree")).toBe(indexBefore)
+  }, 30_000)
+
+  it.skipIf(process.env.ADRATE_SKIP_PUBLIC_MIRROR_E2E === "1")(
+    "produces a commit-closed public mirror that passes the full public-root gate",
+    async () => {
+      const f = await fixture()
+      const plan = await createMirrorPlan({
+        sourceRoot: f.sourceRoot,
+        sourceCommit: f.sourceCommit,
+        targetRoot: f.targetRoot,
+        targetCommit: f.targetCommit,
+      })
+      await applyMirrorPlan(plan)
+      await git(f.targetRoot, "add", ".")
+      await git(f.targetRoot, "commit", "-m", "mirror release candidate")
+      const releaseCommit = await git(f.targetRoot, "rev-parse", "HEAD")
+      await git(f.targetRoot, "tag", "v0.1.0")
+      await writeFile(
+        join(f.targetRoot, ".git/info/exclude"),
+        "\nnode_modules\n",
+        {
+          flag: "a",
+        }
+      )
+      await symlink(
+        await realpath(join(CLI_ROOT, "node_modules")),
+        join(f.targetRoot, "node_modules"),
+        process.platform === "win32" ? "junction" : "dir"
+      )
+      const publicEnvironment = {
+        ...process.env,
+        ADRATE_SKIP_PUBLIC_MIRROR_E2E: "1",
+        ADRATE_NO_SKILLS_NOTIFIER: "1",
+        ADRATE_NO_UPDATE_NOTIFIER: "1",
+      }
+      for (const [command, args] of [
+        ["pnpm", ["typecheck"]],
+        ["pnpm", ["test"]],
+        ["pnpm", ["build"]],
+      ] as const) {
+        await expect(
+          execFileAsync(command, [...args], {
+            cwd: f.targetRoot,
+            encoding: "utf8",
+            env: publicEnvironment,
+            maxBuffer: 16 * 1024 * 1024,
+          })
+        ).resolves.toMatchObject({ stderr: expect.any(String) })
+      }
+      const artifactDirectory = join(await realpath(f.root), "release-artifact")
+      const localGate = await execFileAsync(
+        process.execPath,
+        [
+          "scripts/release-gate.mjs",
+          "--local",
+          "--require-clean",
+          "--tag",
+          "v0.1.0",
+          "--commit",
+          releaseCommit,
+          "--channel",
+          "stable",
+          "--artifact-dir",
+          artifactDirectory,
+        ],
+        {
+          cwd: f.targetRoot,
+          encoding: "utf8",
+          maxBuffer: 8 * 1024 * 1024,
+        }
+      )
+      expect(localGate.stdout).toBe("Local release gate PASS\n")
+      expect(localGate.stderr).toBe("")
+      expect((await readdir(artifactDirectory)).sort()).toStrictEqual([
+        "adrate-cli-0.1.0.tgz",
+        "release-artifact.json",
+      ])
+      await expect(collectMirrorSource(f.targetRoot)).resolves.toHaveLength(
+        plan.files.length
+      )
+
+      const manifestPath = join(f.targetRoot, ".adrate-public-mirror.json")
+      const manifest = await readFile(manifestPath)
+      await writeFile(
+        manifestPath,
+        Buffer.concat([manifest, Buffer.from("\n")])
+      )
+      await expect(
+        execFileAsync(
+          process.execPath,
+          ["scripts/release-gate.mjs", "--local"],
+          {
+            cwd: f.targetRoot,
+            encoding: "utf8",
+            maxBuffer: 8 * 1024 * 1024,
+          }
+        )
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining("Public mirror checkout is not clean"),
+      })
+      await writeFile(manifestPath, manifest)
+
+      await git(f.targetRoot, "commit", "--allow-empty", "-m", "unrelated head")
+      await expect(
+        execFileAsync(
+          process.execPath,
+          ["scripts/release-gate.mjs", "--local"],
+          {
+            cwd: f.targetRoot,
+            encoding: "utf8",
+            maxBuffer: 8 * 1024 * 1024,
+          }
+        )
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining(
+          "not the direct child of its recorded base commit"
+        ),
+      })
+    },
+    180_000
+  )
+})

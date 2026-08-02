@@ -1,0 +1,92 @@
+{
+  "formatVersion": 2,
+  "checkedAt": "2026-08-01T00:00:00.000Z",
+  "channels": {
+    "prerelease": {
+      "status": "blocked",
+      "requiredGateIds": [
+        "github-public-mirror",
+        "npm-bootstrap-and-2fa",
+        "npm-trusted-publisher",
+        "openresty-test"
+      ]
+    },
+    "stable": {
+      "status": "blocked",
+      "requiredGateIds": [
+        "github-public-mirror",
+        "npm-bootstrap-and-2fa",
+        "npm-trusted-publisher",
+        "openresty-test",
+        "openresty-production",
+        "real-cli-e2e",
+        "windows-hardware"
+      ]
+    }
+  },
+  "gates": [
+    {
+      "id": "github-public-mirror",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "AdRate-io/cli 真实远端、保护规则、镜像首个提交和回滚权限尚未验收。"
+    },
+    {
+      "id": "npm-bootstrap-and-2fa",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "包首次创建、owner 与 org 2FA enforcement、最小发布权限尚未在 npm 真实账户验收。"
+    },
+    {
+      "id": "npm-trusted-publisher",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "Trusted Publisher 尚未精确绑定 AdRate-io/cli、publish.yml 与 npm-production environment。"
+    },
+    {
+      "id": "openresty-test",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "test 环境的 route/Host、trusted CIDR、内部 IP 头覆盖、源站防绕过和 110 秒 timeout 尚未实测。"
+    },
+    {
+      "id": "openresty-production",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "production 只能在 test 矩阵通过后变更，当前未执行。"
+    },
+    {
+      "id": "accio-official-connector",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "我们在检索范围内未找到 custom Connector manifest/device-code schema、validator 或 import smoke；第一版不支持 Accio connector，本项已从两个 channel 的 required 列表摘除，保持 blocked 直到拿到合同。"
+    },
+    {
+      "id": "real-cli-e2e",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "真实 npm 安装包的 production/test 与 76 秒最慢链路尚未验收。"
+    },
+    {
+      "id": "windows-hardware",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "Windows 真实硬件 Keychain/fallback/ACL 矩阵尚未运行。"
+    },
+    {
+      "id": "accio-capacity",
+      "status": "blocked",
+      "owner": "Boss",
+      "evidence": null,
+      "blockingReason": "Accio 真实账户规模和轮询节奏是否被 3000 单位/日覆盖尚未确认；第一版不支持 Accio connector，本项已从 stable required 列表摘除，保持 blocked 直到 connector 适配落地。"
+    }
+  ]
+}

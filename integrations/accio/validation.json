@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "artifactKind": "adrate_local_blocker_record_not_official_validator_output",
+  "status": "blocked",
+  "checkedAt": "2026-08-01T00:00:00.000Z",
+  "officialSpecLocated": false,
+  "manifestPath": null,
+  "officialValidator": null,
+  "importSmoke": null,
+  "sources": [
+    {
+      "url": "https://www1.accio.com/work/doc?slug=connectors-guide",
+      "versionOrDate": null
+    },
+    {
+      "url": "https://www1.accio.com/work/doc?slug=changelog",
+      "versionOrDate": "v0.25.0 / 2026-07-22"
+    },
+    {
+      "url": "https://www.npmjs.com/package/@accio-ai/cli",
+      "versionOrDate": null
+    }
+  ],
+  "blockingReasons": [
+    "No official public custom Connector manifest schema or required directory contract was located.",
+    "No official public device-code field contract was located.",
+    "No official public validator or import smoke command was located.",
+    "No real Accio sandbox validation has been performed."
+  ]
+}

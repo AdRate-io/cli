@@ -1,0 +1,4 @@
+interface:
+  display_name: "AdRate Ads Operations"
+  short_description: "Inspect Campaigns and apply safe status changes"
+  default_prompt: "Use $adrate-ads to inspect AdRate Campaigns and make a safe ENABLE or DISABLE change."

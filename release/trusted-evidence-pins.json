@@ -1,0 +1,14 @@
+{
+  "formatVersion": 1,
+  "pins": {
+    "github-public-mirror": null,
+    "npm-bootstrap-and-2fa": null,
+    "npm-trusted-publisher": null,
+    "openresty-test": null,
+    "openresty-production": null,
+    "accio-official-connector": null,
+    "real-cli-e2e": null,
+    "windows-hardware": null,
+    "accio-capacity": null
+  }
+}

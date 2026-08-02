@@ -1,0 +1,61 @@
+{
+  "name": "@adrate/cli",
+  "version": "0.1.0",
+  "description": "Official AdRate command-line client",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AdRate-io/cli.git"
+  },
+  "homepage": "https://github.com/AdRate-io/cli#readme",
+  "bugs": {
+    "url": "https://github.com/AdRate-io/cli/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.18.0",
+  "exports": {},
+  "bin": {
+    "adrate": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "skills-content",
+    "README.md",
+    "scripts/keychain-smoke.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ./scripts/validate-skill-assets.mjs && tsup --config tsup.config.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "release:gate": "node ./scripts/release-gate.mjs --local --require-clean",
+    "release:external-gate": "node ./scripts/release-gate.mjs --external",
+    "mirror": "node ./scripts/public-mirror.mjs",
+    "smoke": "node ./dist/bin.js --version && node ./dist/bin.js --help",
+    "smoke:keychain": "node ./scripts/keychain-smoke.mjs"
+  },
+  "dependencies": {
+    "undici": "^7.24.6"
+  },
+  "optionalDependencies": {
+    "@github/keytar": "7.10.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@github/keytar",
+      "esbuild"
+    ]
+  }
+}

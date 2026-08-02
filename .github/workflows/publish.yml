@@ -1,0 +1,193 @@
+name: Publish @adrate/cli
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify and build immutable package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.identity.outputs.channel }}
+      dist-tag: ${{ steps.identity.outputs.dist-tag }}
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ github.sha }}
+    steps:
+      - name: Check out the public mirror
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Pin unprivileged verification tools
+        run: npm install --global npm@11.12.1 pnpm@10.18.0 --ignore-scripts
+
+      - name: Verify tool versions
+        run: |
+          node --input-type=module -e 'const [major] = process.versions.node.split(".").map(Number); if (major !== 24) process.exit(1)'
+          test "$(npm --version)" = "11.12.1"
+          test "$(pnpm --version)" = "10.18.0"
+
+      - name: Install from the lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Test and build without publish credentials
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Resolve and verify tag identity
+        id: identity
+        run: node scripts/release-gate.mjs --identity --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --channel "${{ contains(github.ref_name, '-') && 'prerelease' || 'stable' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify the immutable release artifact
+        run: pnpm release:gate --channel "${{ steps.identity.outputs.channel }}" --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --artifact-dir "$RUNNER_TEMP/release-artifact"
+
+      - name: Verify channel-specific external readiness
+        run: pnpm release:external-gate --channel "${{ steps.identity.outputs.channel }}" --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --artifact-dir "$RUNNER_TEMP/release-artifact"
+
+      - name: Upload the exact verified tarball and digest manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: adrate-cli-${{ github.sha }}
+          path: ${{ runner.temp }}/release-artifact
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish only the verified artifact
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-production
+    permissions:
+      id-token: write
+    steps:
+      - name: Use Node.js 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Pin the trusted npm client without project scripts
+        run: npm install --global npm@11.12.1 --ignore-scripts
+
+      - name: Verify privileged tool versions
+        run: |
+          node --input-type=module -e 'const [major] = process.versions.node.split(".").map(Number); if (major !== 24) process.exit(1)'
+          test "$(npm --version)" = "11.12.1"
+
+      - name: Download this run's immutable artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: adrate-cli-${{ github.sha }}
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Reverify artifact and prevent dist-tag rollback
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          RELEASE_CHANNEL: ${{ needs.verify.outputs.channel }}
+          VERIFIED_COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto"
+          import { execFileSync } from "node:child_process"
+          import { readFile, readdir } from "node:fs/promises"
+          import { resolve } from "node:path"
+
+          const fail = (message) => { throw new Error(message) }
+          const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$/
+          const parse = (value) => {
+            const match = typeof value === "string" ? semverPattern.exec(value) : null
+            return match ? { core: [match[1], match[2], match[3]], pre: match[4]?.split(".") ?? null } : null
+          }
+          const numeric = (left, right) => left.length === right.length ? (left === right ? 0 : left < right ? -1 : 1) : left.length < right.length ? -1 : 1
+          const compare = (leftValue, rightValue) => {
+            const left = parse(leftValue)
+            const right = parse(rightValue)
+            if (!left || !right) fail("registry version is not strict SemVer")
+            for (let index = 0; index < 3; index += 1) { const result = numeric(left.core[index], right.core[index]); if (result !== 0) return result }
+            if (left.pre === null) return right.pre === null ? 0 : 1
+            if (right.pre === null) return -1
+            for (let index = 0; index < Math.max(left.pre.length, right.pre.length); index += 1) {
+              const a = left.pre[index]
+              const b = right.pre[index]
+              if (a === undefined) return -1
+              if (b === undefined) return 1
+              if (a === b) continue
+              const an = /^\d+$/.test(a)
+              const bn = /^\d+$/.test(b)
+              if (an && bn) return numeric(a, b)
+              if (an !== bn) return an ? -1 : 1
+              return a < b ? -1 : 1
+            }
+            return 0
+          }
+          const exactKeys = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+          const expectedFiles = ["README.md","dist/bin.d.ts","dist/bin.js","dist/bin.js.map","package.json","scripts/keychain-smoke.mjs","skills/adrate-ads/SKILL.md","skills/adrate-ads/agents/openai.yaml","skills/adrate-ads/skill-manifest.json","skills/adrate-shared/SKILL.md","skills/adrate-shared/agents/openai.yaml","skills/adrate-shared/skill-manifest.json","skills-content/adrate-ads/SKILL.md","skills-content/adrate-shared/SKILL.md"].sort()
+          const root = resolve(process.env.RUNNER_TEMP, "release-artifact")
+          const filename = `adrate-cli-${process.env.RELEASE_VERSION}.tgz`
+          const names = (await readdir(root)).sort()
+          if (JSON.stringify(names) !== JSON.stringify([filename, "release-artifact.json"].sort())) fail("artifact file set drifted")
+          const manifest = JSON.parse(await readFile(resolve(root, "release-artifact.json"), "utf8"))
+          if (!exactKeys(manifest, ["formatVersion","packageName","version","channel","distTag","tag","commit","tarball","sha256","files"]) || manifest.formatVersion !== 1 || manifest.packageName !== "@adrate/cli" || manifest.version !== process.env.RELEASE_VERSION || !["prerelease","stable"].includes(manifest.channel) || manifest.channel !== process.env.RELEASE_CHANNEL || manifest.distTag !== (manifest.channel === "prerelease" ? "next" : "latest") || manifest.tag !== `v${manifest.version}` || manifest.tag !== process.env.GITHUB_REF_NAME || manifest.commit !== process.env.GITHUB_SHA || manifest.commit !== process.env.VERIFIED_COMMIT || manifest.tarball !== filename || !/^[0-9a-f]{64}$/.test(manifest.sha256) || !Array.isArray(manifest.files) || manifest.files.length !== expectedFiles.length || manifest.files.some((file, index) => !exactKeys(file, ["path","sha256"]) || file.path !== expectedFiles[index] || !/^[0-9a-f]{64}$/.test(file.sha256))) fail("artifact identity drifted")
+          const tarball = resolve(root, filename)
+          const bytes = await readFile(tarball)
+          if (createHash("sha256").update(bytes).digest("hex") !== manifest.sha256) fail("artifact digest drifted")
+          const entries = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" }).trim().split("\n").map((path) => path.replace(/^package\//, "")).sort()
+          if (JSON.stringify(entries) !== JSON.stringify(expectedFiles)) fail("artifact package file set drifted")
+          const verboseEntries = execFileSync("tar", ["-tvzf", tarball], { encoding: "utf8" }).trim().split("\n")
+          if (verboseEntries.length !== expectedFiles.length || verboseEntries.some((entry) => entry[0] !== "-")) fail("artifact contains a symlink or special entry")
+          for (const file of manifest.files) {
+            const content = execFileSync("tar", ["-xOzf", tarball, `package/${file.path}`], { maxBuffer: 8 * 1024 * 1024 })
+            if (createHash("sha256").update(content).digest("hex") !== file.sha256) fail(`artifact file digest drifted: ${file.path}`)
+          }
+          const packageJson = JSON.parse(execFileSync("tar", ["-xOzf", tarball, "package/package.json"], { encoding: "utf8" }))
+          if (packageJson.name !== "@adrate/cli" || packageJson.version !== manifest.version || JSON.stringify(packageJson.bin) !== JSON.stringify({ adrate: "./dist/bin.js" }) || JSON.stringify(packageJson.exports) !== "{}") fail("artifact package metadata drifted")
+          const sourceMap = JSON.parse(execFileSync("tar", ["-xOzf", tarball, "package/dist/bin.js.map"], { encoding: "utf8" }))
+          if (Object.hasOwn(sourceMap, "sourcesContent") || !Array.isArray(sourceMap.sources)) fail("artifact source map contract drifted")
+          const response = await fetch("https://registry.npmjs.org/-/package/@adrate%2Fcli/dist-tags", { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(5000) })
+          if (!response.ok) fail("registry dist-tag lookup failed closed")
+          {
+            const declared = response.headers.get("content-length")
+            if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > 65536)) fail("registry response size is invalid")
+            const reader = response.body.getReader()
+            const chunks = []
+            let size = 0
+            for (;;) {
+              const result = await reader.read()
+              if (result.done) break
+              size += result.value.byteLength
+              if (size > 65536) fail("registry response too large")
+              chunks.push(Buffer.from(result.value))
+            }
+            const registry = JSON.parse(Buffer.concat(chunks, size).toString("utf8"))
+            if (registry === null || typeof registry !== "object" || Array.isArray(registry)) fail("registry dist-tag response shape drifted")
+            const current = registry[manifest.distTag]
+            if (current !== undefined && (typeof current !== "string" || compare(manifest.version, current) <= 0)) fail("candidate would roll back or repeat the npm dist-tag")
+          }
+          NODE
+
+      - name: Publish the exact verified tarball with Trusted Publishing
+        run: npm publish "${{ runner.temp }}/release-artifact/adrate-cli-${{ needs.verify.outputs.version }}.tgz" --ignore-scripts --access public --tag "${{ needs.verify.outputs.dist-tag }}"
