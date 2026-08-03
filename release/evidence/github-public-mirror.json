@@ -2,13 +2,13 @@
   "formatVersion": 1,
   "gateId": "github-public-mirror",
   "releaseTrain": "0.1.0",
-  "validatedCommit": "61e6d7c0350fbf7b2baee324a8408ec958ed9154",
-  "testedVersion": "0.1.0-beta.4",
-  "testedCommit": "61e6d7c0350fbf7b2baee324a8408ec958ed9154",
-  "tarballSha256": "d278e0a422229323ace55e6572bb23c185bb5df79e5489fcd26f73d27a0cb74b",
+  "validatedCommit": "d595181666228ff52cbead831de0d09c9267e559",
+  "testedVersion": "0.1.0-beta.5",
+  "testedCommit": "d595181666228ff52cbead831de0d09c9267e559",
+  "tarballSha256": "0fdbd8bb408f59049c57b24bd9e82072c79cd618efc142503300fcf1c833ee28",
   "channels": ["prerelease", "stable"],
   "environment": "github-production",
   "issuer": "adrate-release-review-board",
-  "issuedAt": "2026-08-03T05:52:59.743Z",
+  "issuedAt": "2026-08-03T11:13:44.574Z",
   "result": "pass"
 }

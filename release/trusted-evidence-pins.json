@@ -2,22 +2,22 @@
   "formatVersion": 1,
   "pins": {
     "github-public-mirror": {
-      "sha256": "a49e8b4d4ca2d733a7d768fdcf1d55c5c11dbf77b1d3a54d94ce8d05146ed844",
+      "sha256": "3e37bb273faa1b65040996767f2bfaa4d5d674913b369b7b7a38220b441a5ac9",
       "issuer": "adrate-release-review-board",
       "environment": "github-production"
     },
     "npm-bootstrap-and-2fa": {
-      "sha256": "abc5809c00ee4e3ccd8eb4426580133fb7a77593f0a63b469fce4297876b8e64",
+      "sha256": "8efefefb7f055c5e5cf87df395572e290de9a1eea55e23b31639e32d42328590",
       "issuer": "adrate-release-review-board",
       "environment": "npm-production"
     },
     "npm-trusted-publisher": {
-      "sha256": "9627b07b563450578636c801db954b6d0b3b06f86fffe6a630648192250e76fd",
+      "sha256": "23e3a21b8a191c0a611b47f4920117c627a87b7e52db3b9c11f3307362d62bc6",
       "issuer": "adrate-release-review-board",
       "environment": "npm-production"
     },
     "openresty-test": {
-      "sha256": "5ba68c644713c6104cd83b933cd6de7e07282eedc205c38450f2f79b4c4260ba",
+      "sha256": "537eaf74f9e812c8188a2a551b752d6536c4f1ddd94fa3f55e34a1afc3947524",
       "issuer": "adrate-release-review-board",
       "environment": "openresty-test"
     },
