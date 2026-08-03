@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       undici:
-        specifier: ^7.24.6
+        specifier: 7.29.0
         version: 7.29.0
     devDependencies:
       '@types/node':

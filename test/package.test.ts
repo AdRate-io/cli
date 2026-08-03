@@ -136,6 +136,7 @@ describe("CLI package contract", () => {
     expect(metadata.engines).toEqual({ node: ">=22" })
     expect(metadata.exports).toEqual({})
     expect(metadata.files).toEqual([
+      "LICENSE",
       "dist",
       "skills",
       "skills-content",
@@ -293,10 +294,11 @@ describe("CLI package contract", () => {
     }
   })
 
-  it("冻结真实 tarball 的 14 项发布边界", async () => {
+  it("冻结真实 tarball 的 15 项发布边界", async () => {
     const { stdout } = await execFileAsync("tar", ["-tzf", tarball])
     expect(stdout.trim().split("\n").sort()).toEqual(
       [
+        "package/LICENSE",
         "package/README.md",
         "package/dist/bin.d.ts",
         "package/dist/bin.js",

@@ -107,9 +107,10 @@ Windows 状态目录的当前实现使用受保护 DACL：owner 为当前用户�
 
 ## 发布面
 
-`pnpm pack` 的冻结 tarball 只包含以下 14 项：
+`pnpm pack` 的冻结 tarball 只包含以下 15 项：
 
 ```text
+LICENSE
 dist/bin.js
 dist/bin.js.map
 dist/bin.d.ts

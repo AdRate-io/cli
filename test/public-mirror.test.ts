@@ -111,7 +111,9 @@ async function materializeTracked(root: string, tracked: Map<string, Buffer>) {
 async function writeMirrorManifest(
   root: string,
   baseTargetCommit: string,
-  tracked: Map<string, Buffer>
+  tracked: Map<string, Buffer>,
+  // 默认占位 SHA 够用于只读校验；需要走 createMirrorPlan 的用例必须传真实祖先 commit
+  sourceCommit: string = "a".repeat(40)
 ) {
   const files = [...tracked]
     .map(([path, content]) => ({
@@ -124,7 +126,7 @@ async function writeMirrorManifest(
     `${JSON.stringify(
       {
         formatVersion: 1,
-        sourceCommit: "a".repeat(40),
+        sourceCommit,
         baseTargetCommit,
         files,
       },
@@ -135,7 +137,10 @@ async function writeMirrorManifest(
 }
 
 /** 复刻一个"镜像工具刚写完并被维护者正常提交"的公开仓库。 */
-async function syntheticMirrorTarget(source: Array<MirrorFile>) {
+async function syntheticMirrorTarget(
+  source: Array<MirrorFile>,
+  sourceCommit?: string
+) {
   const root = await mkdtemp(join(tmpdir(), "adrate-mirror-manual-"))
   roots.push(root)
   await initializeRepository(root)
@@ -144,7 +149,7 @@ async function syntheticMirrorTarget(source: Array<MirrorFile>) {
   const base = await git(root, "rev-parse", "HEAD")
   const tracked = new Map(source.map((file) => [file.path, file.content]))
   await materializeTracked(root, tracked)
-  await writeMirrorManifest(root, base, tracked)
+  await writeMirrorManifest(root, base, tracked, sourceCommit)
   await git(root, "add", "-A")
   await git(root, "commit", "-m", "mirror commit")
   return { root, tracked, mirrorCommit: await git(root, "rev-parse", "HEAD") }
@@ -172,13 +177,14 @@ describe("public mirror policy", () => {
     expect(isAllowedMirrorPath("skills/unknown/SKILL.md")).toBe(false)
     expect(isAllowedMirrorPath("private-main-site.ts")).toBe(false)
     // 信任根刻意用 branch ruleset 而非 CODEOWNERS：三个合法位置都在 allowlist 之外，
-    // 放进公开仓库会直接触发闭世界阻断。LICENSE 同理，且它还会被 npm 无条件打进
-    // tarball，新增必须重签精确 14 项合同。见 release/README.md。
+    // 放进公开仓库会直接触发闭世界阻断。
+    // LICENSE 曾在这份名单里，2026-08-03 已按流程加入 allowlist 与精确 15 项
+    // tarball 合同（它会被 npm 无条件打包，两者必须一起改），见 release/README.md。
+    expect(isAllowedMirrorPath("LICENSE")).toBe(true)
     for (const forbidden of [
       "CODEOWNERS",
       "docs/CODEOWNERS",
       ".github/CODEOWNERS",
-      "LICENSE",
     ]) {
       expect(isAllowedMirrorPath(forbidden)).toBe(false)
     }
@@ -216,16 +222,18 @@ describe("public mirror policy", () => {
     // 这里刻意断言的是"父提交/base"这条，而不是 manifest-commit 那条：
     // 手工提交让 HEAD 的父变成上一次镜像提交，而 manifest 记录的 base 更早。
     const noResign = await syntheticMirrorTarget(source)
-    await writeFile(join(noResign.root, "LICENSE"), "MIT\n")
+    await writeFile(join(noResign.root, "CODEOWNERS"), "* @someone\n")
     await git(noResign.root, "add", "-A")
-    await git(noResign.root, "commit", "-m", "hand-added LICENSE")
+    await git(noResign.root, "commit", "-m", "hand-added CODEOWNERS")
     await expect(collectMirrorSource(noResign.root)).rejects.toThrow(
       "Target mirror commit is not the direct child of its recorded base commit."
     )
 
     // 第 3 行：手工提交且自洽重签，但引入 allowlist 之外路径 —— manifest 校验拦下。
+    // 这里用 CODEOWNERS 而不是 LICENSE：LICENSE 自 2026-08-03 起已进 allowlist，
+    // 拿它当"白名单外"的例子会让这条断言恒不成立。
     const outside = await syntheticMirrorTarget(source)
-    outside.tracked.set("LICENSE", Buffer.from("MIT\n"))
+    outside.tracked.set("CODEOWNERS", Buffer.from("* @someone\n"))
     await materializeTracked(outside.root, outside.tracked)
     await writeMirrorManifest(
       outside.root,
@@ -233,7 +241,7 @@ describe("public mirror policy", () => {
       outside.tracked
     )
     await git(outside.root, "add", "-A")
-    await git(outside.root, "commit", "-m", "hand-added LICENSE, re-signed")
+    await git(outside.root, "commit", "-m", "hand-added CODEOWNERS, re-signed")
     await expect(collectMirrorSource(outside.root)).rejects.toThrow(
       "Target mirror manifest is invalid."
     )
@@ -255,6 +263,45 @@ describe("public mirror policy", () => {
     )
   }, 60_000)
 
+  /**
+   * 回归（2026-08-03 实际踩中）：往 REQUIRED_FILES 新增一个文件，会让**写于该文件
+   * 存在之前**的 prior manifest 立刻被判 "Target mirror manifest is invalid."，
+   * 此后每一次镜像同步都被拒，错误信息完全指不到根因。
+   *
+   * 既有用例抓不到它，因为 syntheticMirrorTarget 是**从当前 source 造 target**，
+   * 目标里永远已经含有全部必需文件——"历史 manifest 早于新增要求"这条路径从未被走过。
+   */
+  it("历史 manifest 缺少后来才加入 REQUIRED_FILES 的文件时，仍能继续镜像", async () => {
+    // 用 fixture() 造独立私有仓库，而不是直接用 CLI_ROOT：本用例会在"镜像出来的
+    // 公开仓库"里再跑一遍，那里 CLI_ROOT 是公开根（带 manifest），不能当 source。
+    const f = await fixture()
+    const source = (await collectMirrorSource(f.sourceRoot)) as Array<MirrorFile>
+    const laterRequired = "scripts/secret-patterns.mjs"
+    expect(source.some((file) => file.path === laterRequired)).toBe(true)
+
+    // 造一个"该文件尚不存在"的历史目标：manifest 与工作树都不含它。
+    // 这个状态今天已经无法用工具生成（source 侧会拒），只能手工构造 —— 这正是
+    // 缺陷能长期潜伏的原因。
+    const legacy = source.filter((file) => file.path !== laterRequired)
+    const target = await syntheticMirrorTarget(legacy, f.sourceCommit)
+    expect(target.tracked.has(laterRequired)).toBe(false)
+
+    // 关键断言：同步计划路径（inspectMirrorTarget -> parsePriorManifest）必须仍能
+    // 解析这份历史 manifest 并把缺的文件补上，而不是抛 "Target mirror manifest
+    // is invalid." 死锁。
+    //
+    // 刻意**不**断言 collectMirrorSource(target.root)：那条是"把公开仓库当作发布
+    // 候选读取"的闸门语义，在那里强制 REQUIRED_FILES 是正确的 —— 候选就是即将
+    // 发布的东西，缺必需文件必须拒。两种语义不能混。
+    const plan = await createMirrorPlan({
+      sourceRoot: f.sourceRoot,
+      targetRoot: target.root,
+      sourceCommit: f.sourceCommit,
+      targetCommit: target.mirrorCommit,
+    })
+    expect(plan.summary.added).toContain(laterRequired)
+  }, 60_000)
+
   it("rejects sensitive filenames before reading and credential-shaped content", async () => {
     const root = await mkdtemp(join(tmpdir(), "adrate-mirror-secret-"))
     roots.push(root)
@@ -268,6 +315,15 @@ describe("public mirror policy", () => {
     await writeFile(
       join(root, "src", "leak.ts"),
       `export const leaked = ${JSON.stringify(`npm_${"A".repeat(40)}`)}\n`
+    )
+    await expect(collectMirrorSource(root)).rejects.toThrow(
+      "Mirror secret scan rejected"
+    )
+
+    await rm(join(root, "src", "leak.ts"))
+    await writeFile(
+      join(root, "src", "owner-leak.ts"),
+      `export const token = "adr_owner_11111111-2222-4333-8444-555555555555_${"A".repeat(43)}"\n`
     )
     await expect(collectMirrorSource(root)).rejects.toThrow(
       "Mirror secret scan rejected"
@@ -616,6 +672,7 @@ describe("public mirror commit and apply gates", () => {
       ) as { files: Array<{ path: string }> }
       expect(artifactManifest.files.map((file) => file.path)).toStrictEqual(
         [
+          "LICENSE",
           "README.md",
           "dist/bin.d.ts",
           "dist/bin.js",

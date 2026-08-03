@@ -21,6 +21,10 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { collectReleaseSource } from "./public-mirror.mjs"
+import {
+  SECRET_CONTENT_PATTERNS,
+  SECRET_FILE_PATTERN,
+} from "./secret-patterns.mjs"
 
 const execFileAsync = promisify(execFile)
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
@@ -49,6 +53,7 @@ const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$/
 const EXPECTED_TARBALL_FILES = Object.freeze(
   [
+    "LICENSE",
     "README.md",
     "dist/bin.d.ts",
     "dist/bin.js",
@@ -134,15 +139,6 @@ for (const [name, ids] of [
   }
 }
 const TRUSTED_EVIDENCE_PINS_PATH = "release/trusted-evidence-pins.json"
-const SENSITIVE_FILENAME =
-  /(^|\/)(?:\.env(?:\..*)?|\.npmrc|id_rsa|[^/]+\.(?:pem|key|p12|pfx))$/i
-const SECRET_PATTERNS = Object.freeze([
-  /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
-  /\bnpm_[A-Za-z0-9]{30,}\b/,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bsk-[A-Za-z0-9]{24,}\b/,
-])
 
 function fail(message) {
   throw new Error(message)
@@ -182,12 +178,12 @@ function isCanonicalIso(value) {
 }
 
 function assertNoSecret(path, content) {
-  if (SENSITIVE_FILENAME.test(path)) {
+  if (SECRET_FILE_PATTERN.test(path)) {
     fail(`Secret scan rejected a sensitive filename: ${path}`)
   }
   if (content.includes(0)) fail(`Secret scan rejected a binary file: ${path}`)
   const text = content.toString("utf8")
-  if (SECRET_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (SECRET_CONTENT_PATTERNS.some((pattern) => pattern.test(text))) {
     fail(`Secret scan rejected a credential-shaped value in: ${path}`)
   }
 }
@@ -457,6 +453,7 @@ function assertPackageMetadata(packageJson) {
     JSON.stringify(packageJson.exports) !== "{}" ||
     JSON.stringify(packageJson.files) !==
       JSON.stringify([
+        "LICENSE",
         "dist",
         "skills",
         "skills-content",
@@ -840,7 +837,7 @@ async function scanTrackedFiles() {
     { encoding: "utf8" }
   )
   for (const path of stdout.split("\0").filter(Boolean)) {
-    if (SENSITIVE_FILENAME.test(path)) {
+    if (SECRET_FILE_PATTERN.test(path)) {
       fail(`Tracked source contains a sensitive filename: ${path}`)
     }
     const info = await lstat(resolve(CLI_ROOT, path))
@@ -1102,7 +1099,7 @@ async function assertReproduciblePackage(
       JSON.stringify(firstEntries) !== JSON.stringify(EXPECTED_TARBALL_FILES) ||
       JSON.stringify(secondEntries) !== JSON.stringify(EXPECTED_TARBALL_FILES)
     ) {
-      fail("npm tarball does not contain the frozen 14 files.")
+      fail("npm tarball does not contain the frozen 15 files.")
     }
     const [firstExtracted, secondExtracted] = await Promise.all([
       extractAndHash(first, resolve(root, "unpack-first")),
@@ -1205,7 +1202,7 @@ export async function verifyReleaseArtifact(artifactDirectory, identity) {
     JSON.stringify(await tarballEntries(tarball)) !==
     JSON.stringify(EXPECTED_TARBALL_FILES)
   ) {
-    fail("Release artifact tarball does not contain the frozen 14 files.")
+    fail("Release artifact tarball does not contain the frozen 15 files.")
   }
   const temporary = await mkdtemp(resolve(tmpdir(), "adrate-artifact-verify-"))
   try {
