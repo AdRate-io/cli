@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "61a6b843580e867c846f63f48a5de5db01ad34a4",
-  "baseTargetCommit": "61e6d7c0350fbf7b2baee324a8408ec958ed9154",
+  "sourceCommit": "bb8bc5d0d14c54118ed43df56352f94dce89021e",
+  "baseTargetCommit": "244372c8a6856284899036f99b81c375f708a750",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -25,7 +25,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "4b8d403243f853c4df5fb730e45ed883d296a26b5003100b5ec22af82a48e046"
+      "sha256": "59ebccf6e504f04fa18ddec40183a75a460b8a7900b08b5774b8b09b9596dda8"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -396,6 +396,10 @@
       "sha256": "5a2278c97ac0c6e31e7a94f79d06728acc7b01c76187cbcafa1d1da21abfcdd7"
     },
     {
+      "path": "test/bin-process-exit-code.test.ts",
+      "sha256": "44d5a82965e888d8986992872686252fee8731cf4d1b0ffbde4854360b192a65"
+    },
+    {
       "path": "test/command-contract.test.ts",
       "sha256": "dd3e920fb122105bb064a7c505342b73493c61887e9d09660cedb67d6a60dd02"
     },
@@ -497,7 +501,7 @@
     },
     {
       "path": "test/release-gate.test.ts",
-      "sha256": "f15343acb583f8e0cb97f3244b40f538b01d0c25b8d10ab83e06ee40495a39da"
+      "sha256": "81e933994e3e6e6abe348ab4d82352a2f4cc1f3b49d5003b6b97edd799010f68"
     },
     {
       "path": "test/resource-input.test.ts",

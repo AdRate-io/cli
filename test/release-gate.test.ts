@@ -577,17 +577,35 @@ describe("channel readiness and evidence", () => {
     expect(() => validateExternalReadinessDocument(duplicate)).toThrow()
   })
 
-  it("allows prerelease readiness while all stable-only gates remain blocked", async () => {
+  it("allows prerelease readiness while stable remains blocked by at least one stable-only gate", async () => {
     const readiness = makePrereleasePassing(await readinessFixture())
     expect(() => validateExternalReadinessDocument(readiness)).not.toThrow()
     expect(readiness.channels.prerelease.status).toBe("pass")
     expect(readiness.channels.stable.status).toBe("blocked")
-    for (const id of EXTERNAL_GATE_IDS.filter(
+    // 断言的是"stable 仍被至少一个 stable-only gate 挡住"，不是"它们全都 blocked"。
+    //
+    // 2026-08-03：原断言逐个要求全部 stable-only gate 都是 blocked。那句话在写下时
+    // 恰好为真（当时一个 stable gate 都没签过），于是把**当时的现状**写成了不变量。
+    // 后果是签第一个 stable gate（无论哪个）就让本测试变红，而 publish.yml 在跑闸门
+    // 之前先执行 pnpm test —— 红测试硬阻塞发布；修本测试又要改 test/*.ts，那是镜像内
+    // 且当时不在允许清单里的路径，会让全部 stable 证据 runtimeCompatible=false。
+    // 三者叠起来构成死锁：stable 发布路径根本走不通。
+    //
+    // 真正的守卫在别处，且不受本次放宽影响：
+    //   - "rejects editable pass claims without reviewed pins" 拒绝无 pin 的 pass 声明
+    //   - validateExternalReadinessDocument 强制 channel status 必须由 gate 派生
+    // 本测试只负责证明"prerelease 可以先通"这条派生逻辑成立。
+    const stableOnly = EXTERNAL_GATE_IDS.filter(
       (gateId) => !PRERELEASE_GATE_IDS.includes(gateId)
-    )) {
-      expect(readiness.gates.find((gate: any) => gate.id === id).status).toBe(
-        "blocked"
-      )
+    )
+    const blocked = stableOnly.filter(
+      (id) =>
+        readiness.gates.find((gate: any) => gate.id === id).status === "blocked"
+    )
+    expect(blocked.length).toBeGreaterThan(0)
+    for (const id of stableOnly) {
+      const gate = readiness.gates.find((candidate: any) => candidate.id === id)
+      expect(["blocked", "pass"]).toContain(gate.status)
     }
   })
 
