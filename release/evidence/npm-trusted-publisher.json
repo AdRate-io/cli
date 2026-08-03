@@ -2,13 +2,13 @@
   "formatVersion": 1,
   "gateId": "npm-trusted-publisher",
   "releaseTrain": "0.1.0",
-  "validatedCommit": "a0380b2cf0eaa9e54159140500721d352f89f79b",
-  "testedVersion": "0.1.0-beta.2",
-  "testedCommit": "a0380b2cf0eaa9e54159140500721d352f89f79b",
-  "tarballSha256": "182a3d1133faef427ee0576e928f7d07fbe01676a2dd8862c9eddd4be5777841",
+  "validatedCommit": "4901cb92370994e0c969d415a45bffde75f42eee",
+  "testedVersion": "0.1.0-beta.3",
+  "testedCommit": "4901cb92370994e0c969d415a45bffde75f42eee",
+  "tarballSha256": "b024e411cb972ad36767953f9564efe886605a09760d9f33291889d85860fc4d",
   "channels": ["prerelease", "stable"],
   "environment": "npm-production",
   "issuer": "adrate-release-review-board",
-  "issuedAt": "2026-08-02T14:48:44.932Z",
+  "issuedAt": "2026-08-03T05:33:48.752Z",
   "result": "pass"
 }
