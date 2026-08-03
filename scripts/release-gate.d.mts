@@ -27,6 +27,7 @@ export function assertReleaseGitIdentity(
   root: string,
   identity: ReleaseIdentity
 ): Promise<ValidatedReleaseIdentity>
+export const EXPECTED_TARBALL_FILES: ReadonlyArray<string>
 export function validatePublishWorkflow(workflow: string): void
 export function validateReleaseTrainEvidenceBinding(options: {
   channel: ReleaseChannel
