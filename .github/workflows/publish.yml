@@ -145,7 +145,7 @@ jobs:
             return 0
           }
           const exactKeys = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
-          const expectedFiles = ["README.md","dist/bin.d.ts","dist/bin.js","dist/bin.js.map","package.json","scripts/keychain-smoke.mjs","skills/adrate-ads/SKILL.md","skills/adrate-ads/agents/openai.yaml","skills/adrate-ads/skill-manifest.json","skills/adrate-shared/SKILL.md","skills/adrate-shared/agents/openai.yaml","skills/adrate-shared/skill-manifest.json","skills-content/adrate-ads/SKILL.md","skills-content/adrate-shared/SKILL.md"].sort()
+          const expectedFiles = ["LICENSE","README.md","dist/bin.d.ts","dist/bin.js","dist/bin.js.map","package.json","scripts/keychain-smoke.mjs","skills/adrate-ads/SKILL.md","skills/adrate-ads/agents/openai.yaml","skills/adrate-ads/skill-manifest.json","skills/adrate-shared/SKILL.md","skills/adrate-shared/agents/openai.yaml","skills/adrate-shared/skill-manifest.json","skills-content/adrate-ads/SKILL.md","skills-content/adrate-shared/SKILL.md"].sort()
           const root = resolve(process.env.RUNNER_TEMP, "release-artifact")
           const filename = `adrate-cli-${process.env.RELEASE_VERSION}.tgz`
           const names = (await readdir(root)).sort()

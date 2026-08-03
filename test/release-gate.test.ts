@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+  EXPECTED_TARBALL_FILES,
   EXTERNAL_GATE_IDS,
   PRERELEASE_GATE_IDS,
   STABLE_GATE_IDS,
@@ -216,6 +217,33 @@ async function evidenceFixture(
 }
 
 describe("release gate", () => {
+  /**
+   * 回归（2026-08-03 实际烧掉一个版本号）：tarball 的冻结文件清单存在**两份独立
+   * 副本**——release-gate.mjs 的 EXPECTED_TARBALL_FILES，和 publish.yml 里
+   * "Reverify artifact" 步骤内联的 expectedFiles。两者之间原本没有任何交叉校验。
+   *
+   * 加 LICENSE 时只改了前者，本地闸门与外部闸门都 PASS（它们都读前者），
+   * 但发布 job 在 npm publish 之前用后者复验，报 "artifact identity drifted" 失败。
+   * 由于 protect-release-tags 禁止删除与非快进，tag 无法重用，该版本号直接作废。
+   */
+  it("publish.yml 内联的 expectedFiles 必须与 EXPECTED_TARBALL_FILES 完全一致", async () => {
+    const workflow = await readFile(
+      join(CLI_ROOT, ".github/workflows/publish.yml"),
+      "utf8"
+    )
+    // 两侧都对清单调用 .sort()，所以源码书写顺序无关，比的是排序后的内容。
+    // 同时钉死 .sort() 本身：workflow 的复验是按下标逐项比对的，去掉排序会让
+    // 两侧顺序口径分叉，而失败信息只有一句 "artifact identity drifted"。
+    const match = /expectedFiles = \[([^\]]*)\]\.sort\(\)/.exec(workflow)
+    if (!match?.[1]) {
+      throw new Error("publish.yml 里找不到 expectedFiles = [...].sort()")
+    }
+    const inWorkflow = [...match[1].matchAll(/"([^"]+)"/g)]
+      .map((entry) => entry[1] as string)
+      .sort()
+    expect(inWorkflow).toStrictEqual([...EXPECTED_TARBALL_FILES])
+  })
+
   it("passes the local reproducible package and supply-chain checks", async () => {
     const result = await execFileAsync(
       process.execPath,
@@ -342,7 +370,11 @@ async function identityRepositoryFixture(version: string) {
   const outputRoot = await mkdtemp(join(tmpdir(), "adrate-identity-output-"))
   roots.push(root, outputRoot)
   await mkdir(join(root, "scripts"))
-  for (const script of ["release-gate.mjs", "public-mirror.mjs", "secret-patterns.mjs"]) {
+  for (const script of [
+    "release-gate.mjs",
+    "public-mirror.mjs",
+    "secret-patterns.mjs",
+  ]) {
     await copyFile(
       join(CLI_ROOT, "scripts", script),
       join(root, "scripts", script)

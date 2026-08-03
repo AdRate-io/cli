@@ -275,7 +275,9 @@ describe("public mirror policy", () => {
     // 用 fixture() 造独立私有仓库，而不是直接用 CLI_ROOT：本用例会在"镜像出来的
     // 公开仓库"里再跑一遍，那里 CLI_ROOT 是公开根（带 manifest），不能当 source。
     const f = await fixture()
-    const source = (await collectMirrorSource(f.sourceRoot)) as Array<MirrorFile>
+    const source = (await collectMirrorSource(
+      f.sourceRoot
+    )) as Array<MirrorFile>
     const laterRequired = "scripts/secret-patterns.mjs"
     expect(source.some((file) => file.path === laterRequired)).toBe(true)
 

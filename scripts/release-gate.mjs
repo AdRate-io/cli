@@ -32,7 +32,7 @@ const CLI_ROOT = resolve(dirname(SCRIPT_PATH), "..")
 const EXPECTED_REPOSITORY = "git+https://github.com/AdRate-io/cli.git"
 const EXPECTED_PACKAGE_MANAGER = "pnpm@10.18.0"
 const EXPECTED_WORKFLOW_SHA256 =
-  "fd6d50321c7eaa48c3428e7b8a8e8720d39a15a9103a3822167c138697d0e7eb"
+  "14951c793c12048b916dad9b41dea25cfd881d179644a2923085a5998fdb7d42"
 // identity 步骤的完整 argv 属于闭世界合同：release-gate 的 identity 模式要求
 // tag/commit/channel 三者同时提供，缺 --channel 必然 exit 1。字节 SHA 已经能拦住
 // 任何改动，但只会报"workflow 与已审查字节不一致"，看不出缺了哪一段；这里再单列一条
@@ -51,7 +51,7 @@ const SHA1_PATTERN = /^[0-9a-f]{40}$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$/
-const EXPECTED_TARBALL_FILES = Object.freeze(
+export const EXPECTED_TARBALL_FILES = Object.freeze(
   [
     "LICENSE",
     "README.md",
