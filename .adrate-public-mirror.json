@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "b4f0f91d678cd14665024f3c2c537e97f42c9c40",
-  "baseTargetCommit": "a0380b2cf0eaa9e54159140500721d352f89f79b",
+  "sourceCommit": "2552386c5d0aa87bbdb150803c2bf55bd2f95aab",
+  "baseTargetCommit": "ae01a94d6634690d3883f6e6ffc04e8b499d3497",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -20,16 +20,20 @@
       "sha256": "615a53aecde4da9fccc3be80c0cffd6522d131440bec250b66fa7172671f69da"
     },
     {
+      "path": "LICENSE",
+      "sha256": "470f08cdeefdabd1249e0e2dd1edffb8c691f9ff2fbebe32b538b2a7dbc038ac"
+    },
+    {
       "path": "package.json",
-      "sha256": "964df0f744054de28d67ee54a4af763f11006a60d66f686fc1ea7a1e27e3859f"
+      "sha256": "cdd8c2cae49cde1738fadcd317eba12e1e969c017f469c0a2ab2c2600c996603"
     },
     {
       "path": "pnpm-lock.yaml",
-      "sha256": "ed7d5a98b011dfe86c66b31431f1d3683459ceeebc8f50366d0ec34baae5a20f"
+      "sha256": "b84f3179accb0b9b5e0ee4aa9225522387dea6fb158d47d315fbad15f81e621e"
     },
     {
       "path": "README.md",
-      "sha256": "94427e6390d3ceb47dedbc2dd6bd6f7664f5a40d8772dfa8cc5a0c0bea773137"
+      "sha256": "5653658db9e487e21b1030d107f4c906ad74c16c52451adbef3559ed63203f1b"
     },
     {
       "path": "release/evidence/github-public-mirror.json",
@@ -53,11 +57,11 @@
     },
     {
       "path": "release/README.md",
-      "sha256": "bd248f6f1ae205b2b667008854c77df0b1fb5a36984ba7a0d298fa28776852a3"
+      "sha256": "e14d38eae1816475e5171aea4f2c12ea7f94612f9dc9fbd2bca4a8f5d6f46683"
     },
     {
       "path": "release/RELEASE_NOTES-0.1.0.md",
-      "sha256": "600c0702413aa44cf2fa0a45430749751950c06df5379a330fb11dfaf9d08e5b"
+      "sha256": "8b7cad115b82597546acda05b3ebabd3e52dc019832caca81879403ce20da820"
     },
     {
       "path": "release/trusted-evidence-pins.json",
@@ -73,7 +77,7 @@
     },
     {
       "path": "scripts/public-mirror.mjs",
-      "sha256": "ec7b258c09df371a62eff33b364d8b8d05c3402ca436e01a9a2f50555435208d"
+      "sha256": "1522db4a0a4953c905f9fcf782437af815e3ae6110673e8005b2cfb3fbbf5cdd"
     },
     {
       "path": "scripts/release-gate.d.mts",
@@ -81,7 +85,11 @@
     },
     {
       "path": "scripts/release-gate.mjs",
-      "sha256": "8b2500861e8914d25ba3a9e7a353f58364462cfa7b37d597a600b29ed69cb61c"
+      "sha256": "398894fb5389296f25dcc94eefc1945a3d5eb9714aa3147b6b5d6ccb99a2a692"
+    },
+    {
+      "path": "scripts/secret-patterns.mjs",
+      "sha256": "0ea822d9994ce8aba687c992a5575b3ecc54cb77b475f7b76ce08ff1db97747a"
     },
     {
       "path": "scripts/skill-assets-contract.d.mts",
@@ -457,7 +465,7 @@
     },
     {
       "path": "test/package.test.ts",
-      "sha256": "cd3b6b858a0d4e7128f85ee4ea736426f1c7b92d56652b032f4bf3711504738d"
+      "sha256": "7a83af622946253ba8588653ddfa639972304f086640795a8b79e5fea8ad587e"
     },
     {
       "path": "test/parser.test.ts",
@@ -481,7 +489,7 @@
     },
     {
       "path": "test/public-mirror.test.ts",
-      "sha256": "3296e89fe04b7741465ce7b0e19309e95417738312deef3af3e92203b8c2db47"
+      "sha256": "1b911618f3da5bc56bd6db8b594315fef33caa26f7e009278f600bc755aba58c"
     },
     {
       "path": "test/read-service.test.ts",
@@ -489,7 +497,7 @@
     },
     {
       "path": "test/release-gate.test.ts",
-      "sha256": "6d6aa9d54d7c5c6b760456ca4e65ef142b1998e3eaa5dde3c11f09074af09e1b"
+      "sha256": "25b35e638ec1e6fd850991c0590aa53eaccb0a16fddd3b6e7f67ffec6769b742"
     },
     {
       "path": "test/resource-input.test.ts",

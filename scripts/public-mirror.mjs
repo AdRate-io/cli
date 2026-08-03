@@ -17,6 +17,10 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+import {
+  SECRET_CONTENT_PATTERNS,
+  SECRET_FILE_PATTERN,
+} from "./secret-patterns.mjs"
 
 const execFileAsync = promisify(execFile)
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
@@ -37,6 +41,7 @@ const RELEASE_EVIDENCE_IDS = new Set([
 ])
 const ROOT_FILES = new Set([
   ".gitignore",
+  "LICENSE",
   "README.md",
   "package.json",
   "pnpm-lock.yaml",
@@ -47,27 +52,20 @@ const ROOT_FILES = new Set([
 const REQUIRED_FILES = Object.freeze([
   ".github/workflows/publish.yml",
   ".gitignore",
+  "LICENSE",
   "README.md",
   "package.json",
   "pnpm-lock.yaml",
   "release/trusted-evidence-pins.json",
   "scripts/public-mirror.mjs",
   "scripts/release-gate.mjs",
+  "scripts/secret-patterns.mjs",
   "src/bin.ts",
   "test/package.test.ts",
   "skills/adrate-shared/SKILL.md",
   "skills/adrate-ads/SKILL.md",
   "skills-content/adrate-shared/SKILL.md",
   "skills-content/adrate-ads/SKILL.md",
-])
-const SECRET_FILE_PATTERN =
-  /(^|\/)(?:\.env(?:\..*)?|\.npmrc|id_rsa|[^/]+\.(?:pem|key|p12|pfx))$/i
-const SECRET_CONTENT_PATTERNS = Object.freeze([
-  /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
-  /\bnpm_[A-Za-z0-9]{30,}\b/,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bsk-[A-Za-z0-9]{24,}\b/,
 ])
 
 function toPosix(path) {
@@ -365,9 +363,14 @@ function parsePriorManifest(text) {
   ) {
     return null
   }
-  for (const required of REQUIRED_FILES) {
-    if (!seen.has(required)) return null
-  }
+  // 刻意不在这里校验 REQUIRED_FILES。prior manifest 是**历史**状态，用**当前**
+  // 的必需文件清单去要求它会造成死锁：任何一次往 REQUIRED_FILES 新增文件，都会
+  // 让写于该文件存在之前的 manifest 立刻变成 "invalid"，此后每一次镜像同步都被
+  // 拒绝，且错误信息完全指不到根因（2026-08-03 加 LICENSE 与 secret-patterns.mjs
+  // 时实际触发）。REQUIRED_FILES 的正确执行点是 source 侧的 collectCommittedSource
+  // ——它保证**即将写出**的镜像状态是完整的；prior manifest 只负责建立可信基线，
+  // 供计划计算最小 diff 与单父闭合校验。apply 之后 target 内容等于 source，
+  // 完整性由 source 侧那道检查兜住，这里放宽不会让缺文件的终态通过。
   return { ...value, files }
 }
 

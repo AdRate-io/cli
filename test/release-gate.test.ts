@@ -342,7 +342,7 @@ async function identityRepositoryFixture(version: string) {
   const outputRoot = await mkdtemp(join(tmpdir(), "adrate-identity-output-"))
   roots.push(root, outputRoot)
   await mkdir(join(root, "scripts"))
-  for (const script of ["release-gate.mjs", "public-mirror.mjs"]) {
+  for (const script of ["release-gate.mjs", "public-mirror.mjs", "secret-patterns.mjs"]) {
     await copyFile(
       join(CLI_ROOT, "scripts", script),
       join(root, "scripts", script)

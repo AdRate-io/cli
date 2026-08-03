@@ -42,9 +42,10 @@ adrate skills read <name> [path]
 
 ## 冻结 tarball
 
-待发布包必须精确包含以下 14 项：
+待发布包必须精确包含以下 15 项：
 
 ```text
+LICENSE
 dist/bin.js
 dist/bin.js.map
 dist/bin.d.ts
