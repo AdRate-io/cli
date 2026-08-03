@@ -1,6 +1,6 @@
 {
   "formatVersion": 2,
-  "checkedAt": "2026-08-02T14:48:44.932Z",
+  "checkedAt": "2026-08-03T05:33:48.752Z",
   "channels": {
     "prerelease": {
       "status": "pass",
@@ -31,7 +31,7 @@
       "owner": "Boss",
       "evidence": {
         "path": "release/evidence/github-public-mirror.json",
-        "sha256": "87b0a3361e5e75c92e6fd94d22a5c81868ef9799c64ee152d771c46006c7dc2f"
+        "sha256": "9e4fa59840c8760056b14a183765692d2d87d33d4f533dabad87288c1abc088e"
       },
       "blockingReason": null
     },
@@ -41,7 +41,7 @@
       "owner": "Boss",
       "evidence": {
         "path": "release/evidence/npm-bootstrap-and-2fa.json",
-        "sha256": "2af4474962e5e34548a119f02ee0be336d7e028ead2b6eccfd1c13fab6968e2d"
+        "sha256": "e3f8bd53939a50c083e224749302f031cc9ffd9b24284aec315b305fcddf4ed9"
       },
       "blockingReason": null
     },
@@ -51,7 +51,7 @@
       "owner": "Boss",
       "evidence": {
         "path": "release/evidence/npm-trusted-publisher.json",
-        "sha256": "806c5cb7d5ad8077b3cffef8a6ab2de013d8fa2555b58f05cd3e3efff6c3f40c"
+        "sha256": "1944480b1c2ebfbad24a1ebd2c77d9d668278511a5a37485d2089b6f2e15eaf2"
       },
       "blockingReason": null
     },
@@ -61,7 +61,7 @@
       "owner": "Boss",
       "evidence": {
         "path": "release/evidence/openresty-test.json",
-        "sha256": "9f84469deb6d7e2db4de25d08ac1a9c77968d675f9e4191c0540aae6aef7f354"
+        "sha256": "a5f5a10ee37cf10a79ce3b65bdf4a5a6ec9973e35550f0cddd662e71be533f70"
       },
       "blockingReason": null
     },
@@ -70,35 +70,35 @@
       "status": "blocked",
       "owner": "Boss",
       "evidence": null,
-      "blockingReason": "production 只能在 test 矩阵通过后变更，当前未执行。Boss 2026-08-02 决定 api.adrate.io 开橙云，因此本项取证必须额外覆盖两条测试环境结构性覆盖不到的路径：经 Cloudflare 边缘时 set_real_ip_from + real_ip_header 能正确还原真实客户端 IP；以及 T08 76 秒最慢写链不被 Cloudflare 100 秒代理超时切断。"
+      "blockingReason": "production \u53ea\u80fd\u5728 test \u77e9\u9635\u901a\u8fc7\u540e\u53d8\u66f4\uff0c\u5f53\u524d\u672a\u6267\u884c\u3002Boss 2026-08-02 \u51b3\u5b9a api.adrate.io \u5f00\u6a59\u4e91\uff0c\u56e0\u6b64\u672c\u9879\u53d6\u8bc1\u5fc5\u987b\u989d\u5916\u8986\u76d6\u4e24\u6761\u6d4b\u8bd5\u73af\u5883\u7ed3\u6784\u6027\u8986\u76d6\u4e0d\u5230\u7684\u8def\u5f84\uff1a\u7ecf Cloudflare \u8fb9\u7f18\u65f6 set_real_ip_from + real_ip_header \u80fd\u6b63\u786e\u8fd8\u539f\u771f\u5b9e\u5ba2\u6237\u7aef IP\uff1b\u4ee5\u53ca T08 76 \u79d2\u6700\u6162\u5199\u94fe\u4e0d\u88ab Cloudflare 100 \u79d2\u4ee3\u7406\u8d85\u65f6\u5207\u65ad\u3002"
     },
     {
       "id": "accio-official-connector",
       "status": "blocked",
       "owner": "Boss",
       "evidence": null,
-      "blockingReason": "我们在检索范围内未找到 custom Connector manifest/device-code schema、validator 或 import smoke；第一版不支持 Accio connector，本项已从两个 channel 的 required 列表摘除，保持 blocked 直到拿到合同。"
+      "blockingReason": "\u6211\u4eec\u5728\u68c0\u7d22\u8303\u56f4\u5185\u672a\u627e\u5230 custom Connector manifest/device-code schema\u3001validator \u6216 import smoke\uff1b\u7b2c\u4e00\u7248\u4e0d\u652f\u6301 Accio connector\uff0c\u672c\u9879\u5df2\u4ece\u4e24\u4e2a channel \u7684 required \u5217\u8868\u6458\u9664\uff0c\u4fdd\u6301 blocked \u76f4\u5230\u62ff\u5230\u5408\u540c\u3002"
     },
     {
       "id": "real-cli-e2e",
       "status": "blocked",
       "owner": "Boss",
       "evidence": null,
-      "blockingReason": "真实 npm 安装包的 production/test 与 76 秒最慢链路尚未验收。"
+      "blockingReason": "\u771f\u5b9e npm \u5b89\u88c5\u5305\u7684 production/test \u4e0e 76 \u79d2\u6700\u6162\u94fe\u8def\u5c1a\u672a\u9a8c\u6536\u3002"
     },
     {
       "id": "windows-hardware",
       "status": "blocked",
       "owner": "Boss",
       "evidence": null,
-      "blockingReason": "Windows 真实硬件 Keychain/fallback/ACL 矩阵尚未运行。"
+      "blockingReason": "Windows \u771f\u5b9e\u786c\u4ef6 Keychain/fallback/ACL \u77e9\u9635\u5c1a\u672a\u8fd0\u884c\u3002"
     },
     {
       "id": "accio-capacity",
       "status": "blocked",
       "owner": "Boss",
       "evidence": null,
-      "blockingReason": "Accio 真实账户规模和轮询节奏是否被 3000 单位/日覆盖尚未确认；第一版不支持 Accio connector，本项已从 stable required 列表摘除，保持 blocked 直到 connector 适配落地。"
+      "blockingReason": "Accio \u771f\u5b9e\u8d26\u6237\u89c4\u6a21\u548c\u8f6e\u8be2\u8282\u594f\u662f\u5426\u88ab 3000 \u5355\u4f4d/\u65e5\u8986\u76d6\u5c1a\u672a\u786e\u8ba4\uff1b\u7b2c\u4e00\u7248\u4e0d\u652f\u6301 Accio connector\uff0c\u672c\u9879\u5df2\u4ece stable required \u5217\u8868\u6458\u9664\uff0c\u4fdd\u6301 blocked \u76f4\u5230 connector \u9002\u914d\u843d\u5730\u3002"
     }
   ]
 }
