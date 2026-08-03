@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "e30c678972f1d4c61f9955fb3fcc545898d25114",
-  "baseTargetCommit": "ec19a2ec0dde05a0305f6e2d754f7394c50d98db",
+  "sourceCommit": "61a6b843580e867c846f63f48a5de5db01ad34a4",
+  "baseTargetCommit": "61e6d7c0350fbf7b2baee324a8408ec958ed9154",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -37,23 +37,23 @@
     },
     {
       "path": "release/evidence/github-public-mirror.json",
-      "sha256": "9e4fa59840c8760056b14a183765692d2d87d33d4f533dabad87288c1abc088e"
+      "sha256": "a49e8b4d4ca2d733a7d768fdcf1d55c5c11dbf77b1d3a54d94ce8d05146ed844"
     },
     {
       "path": "release/evidence/npm-bootstrap-and-2fa.json",
-      "sha256": "e3f8bd53939a50c083e224749302f031cc9ffd9b24284aec315b305fcddf4ed9"
+      "sha256": "abc5809c00ee4e3ccd8eb4426580133fb7a77593f0a63b469fce4297876b8e64"
     },
     {
       "path": "release/evidence/npm-trusted-publisher.json",
-      "sha256": "1944480b1c2ebfbad24a1ebd2c77d9d668278511a5a37485d2089b6f2e15eaf2"
+      "sha256": "9627b07b563450578636c801db954b6d0b3b06f86fffe6a630648192250e76fd"
     },
     {
       "path": "release/evidence/openresty-test.json",
-      "sha256": "a5f5a10ee37cf10a79ce3b65bdf4a5a6ec9973e35550f0cddd662e71be533f70"
+      "sha256": "5ba68c644713c6104cd83b933cd6de7e07282eedc205c38450f2f79b4c4260ba"
     },
     {
       "path": "release/external-readiness.json",
-      "sha256": "c4c5936c63043762623783f2ce77dfe23ee07135d334c3cf2508dc14adefc262"
+      "sha256": "e316c1d3a02885f905593c6b97cec66b959528494a8d2db78b211ea186aea187"
     },
     {
       "path": "release/README.md",
@@ -65,7 +65,7 @@
     },
     {
       "path": "release/trusted-evidence-pins.json",
-      "sha256": "6d933031e1dfff5a5af59dc7ff16320c312040ab0db1f7c078e4676eeffdb8ec"
+      "sha256": "92911dcc81a83a78e775dd3a5961e5fbd789370bfed68f4c58a4ac0f4430a74c"
     },
     {
       "path": "scripts/keychain-smoke.mjs",
