@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "f47d69b01d60c74e3c9740e39a14fd50c1e2bc4b",
-  "baseTargetCommit": "b9767fa44149f5e93fb1d68317903848950c89ed",
+  "sourceCommit": "ab09043fb72e012233e8d51a80d8c2d430f864b9",
+  "baseTargetCommit": "551d61024e344f18df5ff35ea4db7ebbf189b930",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -25,7 +25,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "2602be98e84466934740d8ad23f885d24797d92608174d84676735b0223680c7"
+      "sha256": "dec972ce75f719ab6ebd42a62d3bdcbbf68d21b0ae5eb1320bd4d719f408cf2e"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -457,7 +457,7 @@
     },
     {
       "path": "test/public-mirror.test.ts",
-      "sha256": "87d391e8544783f556ef59fd98bfeb578a618f9adaa23fed83a852d6160d9cc3"
+      "sha256": "d991312632a60bccf1bdbafbbb2a3d75dda68c673d5563b012c762f84cfca082"
     },
     {
       "path": "test/read-service.test.ts",
