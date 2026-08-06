@@ -1,6 +1,6 @@
 {
   "name": "@adrate/cli",
-  "version": "0.1.0-beta.5",
+  "version": "0.1.0-beta.6",
   "description": "Official AdRate command-line client",
   "repository": {
     "type": "git",
@@ -36,8 +36,8 @@
     "build": "node ./scripts/validate-skill-assets.mjs && tsup --config tsup.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "skills:reseal": "node ./scripts/reseal-skill-assets.mjs",
     "release:gate": "node ./scripts/release-gate.mjs --local --require-clean",
-    "release:external-gate": "node ./scripts/release-gate.mjs --external",
     "mirror": "node ./scripts/public-mirror.mjs",
     "smoke": "node ./dist/bin.js --version && node ./dist/bin.js --help",
     "smoke:keychain": "node ./scripts/keychain-smoke.mjs"

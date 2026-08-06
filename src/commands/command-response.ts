@@ -15,6 +15,7 @@ import type { CliExitCode } from "../constants.js"
 export interface ExpectedCommandIdentity {
   commandId?: string
   idempotencyKey?: string
+  capabilityId?: string
   intent?: PendingCommandIntent
 }
 
@@ -82,6 +83,12 @@ function commandMatchesExpected(
   ) {
     return false
   }
+  if (
+    expected.capabilityId !== undefined &&
+    command.capabilityId !== expected.capabilityId
+  ) {
+    return false
+  }
   const intent = expected.intent
   return (
     intent === undefined ||
@@ -107,9 +114,11 @@ function errorCommandIsCompatible(
   envelope: PublicErrorEnvelope,
   command: PublicCommandDto
 ): boolean {
+  if (command.status === "succeeded") return false
   return envelope.error.retryable
-    ? command.status === "pending" && !command.isFinal
-    : command.status === "failed" && command.isFinal
+    ? !command.isFinal
+    : command.isFinal &&
+        (command.status === "failed" || command.status === "unknown")
 }
 
 /** 严格解码 Status POST 的 Command 创建证据，不按 HTTP/error code 猜测。 */
@@ -143,7 +152,7 @@ export function decodeStatusCommandResponse(
   return { ...decoded, source: "error" }
 }
 
-/** Command GET 成功必须是精确 `{ command }`，错误不允许夹带 Status 证据。 */
+/** Command GET 成功必须包含可解码 command，错误不允许夹带 Status 证据。 */
 export function decodeCommandGetResponse(
   envelope: PublicEnvelope,
   expected: ExpectedCommandIdentity
@@ -171,13 +180,36 @@ function statusContractViolation(
   return httpStatus === expectedStatus ? null : "unexpected_status_for_command"
 }
 
-function hasUnknownOperationCharge(envelope: PublicEnvelope): boolean {
-  return !envelope.ok && envelope.meta.usage?.operationUnitsCharged === null
+export function hasPositiveCommandSuccess(
+  command: PublicCommandDto
+): boolean {
+  if (command.status !== "succeeded" || !command.isFinal) return false
+  const desiredStatus = command.target.desiredStatus
+  return (
+    (command.verificationBasis === "verified_no_op" &&
+      command.beforeStatus === desiredStatus) ||
+    (command.verificationBasis === "observed_target_state" &&
+      command.afterStatus === desiredStatus)
+  )
+}
+
+export function exitCodeForCommand(command: PublicCommandDto): CliExitCode {
+  if (hasPositiveCommandSuccess(command)) return EXIT_CODE.success
+  if (command.status === "failed" && command.isFinal) {
+    return EXIT_CODE.business
+  }
+  if (
+    !command.isFinal &&
+    (command.status === "pending" || command.status === "executing")
+  ) {
+    return EXIT_CODE.retryable
+  }
+  return EXIT_CODE.outcomeUnknown
 }
 
 /**
- * Status 本地证据的唯一清理决策。无可信 Command 且缺少
- * `commandCreated=false` 时始终保留；日单位预留结果未知时退出 4。
+ * Status 本地证据的唯一清理决策。额度可见性只产生提示，
+ * 不覆盖可信 Command 终态或成功证据。
  */
 export function decideStatusPendingCommand(
   envelope: PublicEnvelope,
@@ -185,45 +217,49 @@ export function decideStatusPendingCommand(
   expected: ExpectedCommandIdentity
 ): PendingCommandDecision {
   const evidence = decodeStatusCommandResponse(envelope, expected)
-  if (hasUnknownOperationCharge(envelope)) {
-    if (evidence.kind === "command" && !evidence.command.isFinal) {
-      return {
-        action: "retain_command",
-        exitCode: EXIT_CODE.retryable,
-        command: evidence.command,
-        contractViolation: null,
-      }
-    }
-    return {
-      action: "retain_unknown",
-      exitCode: EXIT_CODE.retryable,
-      command: null,
-      contractViolation:
-        evidence.kind === "invalid" ||
-        (evidence.kind === "command" && evidence.command.isFinal) ||
-        evidence.kind === "not_created"
-          ? "invalid_command_response"
-          : null,
-    }
-  }
   if (evidence.kind === "command") {
     const contractViolation =
       evidence.source === "success"
         ? statusContractViolation(httpStatus, evidence.command)
         : null
-    if (evidence.command.isFinal) {
+    if (hasPositiveCommandSuccess(evidence.command)) {
       return {
         action: "remove",
-        exitCode: exitCodeForEnvelope(envelope),
+        exitCode: EXIT_CODE.success,
+        command: evidence.command,
+        contractViolation,
+      }
+    }
+    if (
+      evidence.command.isFinal &&
+      (evidence.command.status === "failed" ||
+        evidence.command.status === "unknown")
+    ) {
+      return {
+        action: "remove",
+        exitCode: exitCodeForCommand(evidence.command),
+        command: evidence.command,
+        contractViolation,
+      }
+    }
+    if (
+      !evidence.command.isFinal &&
+      (evidence.command.status === "pending" ||
+        evidence.command.status === "executing" ||
+        evidence.command.status === "unknown")
+    ) {
+      return {
+        action: "retain_command",
+        exitCode: exitCodeForCommand(evidence.command),
         command: evidence.command,
         contractViolation,
       }
     }
     return {
-      action: "retain_command",
-      exitCode: envelope.ok ? EXIT_CODE.success : EXIT_CODE.retryable,
-      command: evidence.command,
-      contractViolation,
+      action: "retain_unknown",
+      exitCode: EXIT_CODE.outcomeUnknown,
+      command: null,
+      contractViolation: "invalid_command_response",
     }
   }
   if (evidence.kind === "not_created") {
@@ -242,26 +278,52 @@ export function decideStatusPendingCommand(
   }
 }
 
-/** Command GET 永不转成 POST 决策；错误保留，终态成功才清理。 */
+/** Command GET 永不转成 POST 决策；只有已知终态清理本地 pending。 */
 export function decideCommandGetPendingCommand(
   envelope: PublicEnvelope,
   expected: ExpectedCommandIdentity
 ): PendingCommandDecision {
   const evidence = decodeCommandGetResponse(envelope, expected)
   if (evidence.kind === "command") {
-    return evidence.command.isFinal
-      ? {
-          action: "remove",
-          exitCode: EXIT_CODE.success,
-          command: evidence.command,
-          contractViolation: null,
-        }
-      : {
-          action: "retain_command",
-          exitCode: EXIT_CODE.success,
-          command: evidence.command,
-          contractViolation: null,
-        }
+    if (hasPositiveCommandSuccess(evidence.command)) {
+      return {
+        action: "remove",
+        exitCode: EXIT_CODE.success,
+        command: evidence.command,
+        contractViolation: null,
+      }
+    }
+    if (
+      evidence.command.isFinal &&
+      (evidence.command.status === "failed" ||
+        evidence.command.status === "unknown")
+    ) {
+      return {
+        action: "remove",
+        exitCode: exitCodeForCommand(evidence.command),
+        command: evidence.command,
+        contractViolation: null,
+      }
+    }
+    if (
+      !evidence.command.isFinal &&
+      (evidence.command.status === "pending" ||
+        evidence.command.status === "executing" ||
+        evidence.command.status === "unknown")
+    ) {
+      return {
+        action: "retain_command",
+        exitCode: exitCodeForCommand(evidence.command),
+        command: evidence.command,
+        contractViolation: null,
+      }
+    }
+    return {
+      action: "retain_unknown",
+      exitCode: EXIT_CODE.outcomeUnknown,
+      command: null,
+      contractViolation: "invalid_command_response",
+    }
   }
   if (evidence.kind === "error_without_command") {
     return {

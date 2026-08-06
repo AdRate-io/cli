@@ -592,8 +592,8 @@ describe("FallbackFileCredentialBackend", () => {
       )
       const store = new CredentialStore(new FakeBackend("keychain"), fallback)
 
-      // canonical fallback Token 的删除按 T09 冻结合同必须在 auth lock 内
-      // 完成（生产唯一调用方 auth-cleanup-coordinator 的 prepared 阶段亦然）。
+      // canonical fallback Token 的删除必须在 auth lock 内完成，
+      // 生产的登出清理也保持同一条边界。
       await fixture.fileSystem.withLock(fixture.paths.authLock, () =>
         store.removeAuthenticationArtifacts(null, true)
       )

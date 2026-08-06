@@ -11,14 +11,8 @@ export interface CliPaths {
   deviceCurrent: string
   deviceIssueReservation: string
   devicePollAttempt: string
-  authCleanupReservation: string
-  logoutDeliveryJournal: string
   pendingCommands: string
-  pendingCommandAttempts: string
   authLock: string
-  cacheDirectory: string
-  updateCache: string
-  updateCacheLock: string
 }
 
 export function createCliPaths(root = join(homedir(), ".adrate")): CliPaths {
@@ -36,13 +30,7 @@ export function createCliPaths(root = join(homedir(), ".adrate")): CliPaths {
       "issue-reservation.json"
     ),
     devicePollAttempt: join(root, "device-authorizations", "poll-attempt.json"),
-    authCleanupReservation: join(root, ".auth-cleanup.json"),
-    logoutDeliveryJournal: join(root, ".logout-delivery.json"),
     pendingCommands: join(root, "pending-commands"),
-    pendingCommandAttempts: join(root, "pending-command-attempts"),
     authLock: join(root, ".auth.lock"),
-    cacheDirectory: join(root, "cache"),
-    updateCache: join(root, "cache", "update.json"),
-    updateCacheLock: join(root, "cache", ".update.lock"),
   })
 }

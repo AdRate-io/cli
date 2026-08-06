@@ -18,10 +18,6 @@ import { outcomeFromEnvelope } from "../output.js"
 import { decideCommandGetPendingCommand } from "./command-response.js"
 import { settlePendingCommand } from "./pending-command-settlement.js"
 import {
-  PendingCommandAttemptBusyError,
-  PendingCommandAttemptUnsafeError,
-} from "./pending-command-attempt.js"
-import {
   PENDING_COMMAND_RECORD_ID_PATTERN,
   pendingCredentialScopeMatches,
   pendingRecordsHaveSameIdentity,
@@ -35,7 +31,6 @@ import type { JsonObject } from "../contracts/json.js"
 import type { CliOutcome } from "../errors.js"
 import type { PublicHttpClient, PublicResponse } from "../http/client.js"
 import type { ExpectedCommandIdentity } from "./command-response.js"
-import type { PendingCommandAttemptHandle } from "./pending-command-attempt.js"
 import type {
   PendingCommandLastResponse,
   PendingCommandRecord,
@@ -53,10 +48,6 @@ export interface CommandGetInput {
   commandId?: string
   idempotencyKey?: string
   requestId?: string
-}
-
-export interface CommandQueryExecutionContext {
-  attempt?: PendingCommandAttemptHandle
 }
 
 export interface ExactCommandNotFoundProof {
@@ -143,7 +134,6 @@ export function validateCommandGetInput(
     if (!LOWERCASE_UUID_PATTERN.test(commandId)) {
       throw usageFailure("--command-id must be a lowercase UUID.")
     }
-    // UUID 通过固定 ASCII 正则后才允许直接进入 raw path。
     return {
       kind: "command_id",
       commandId,
@@ -265,6 +255,7 @@ function expectedIdentity(
     ...(associated.record.commandId === null
       ? {}
       : { commandId: associated.record.commandId }),
+    capabilityId: associated.record.capabilityId,
     intent: associated.record.intent,
   }
 }
@@ -326,11 +317,7 @@ export class CommandQueryService {
     this.environment = options.environment ?? process.env
   }
 
-  async get(
-    input: CommandGetInput,
-    context: CommandQueryExecutionContext = {}
-  ): Promise<CommandQueryOutcome> {
-    // 纯输入闸门必须在 scan、Keychain 和网络之前完成。
+  async get(input: CommandGetInput): Promise<CommandQueryOutcome> {
     const query = validateCommandGetInput(input)
     const associated = findAssociatedPending(await this.pending.scan(), query)
 
@@ -339,27 +326,6 @@ export class CommandQueryService {
     }
     if (associated?.record.localState === "orphaned_credential") {
       throw blockedFailure(associated, "orphaned_credential")
-    }
-
-    if (associated !== null) {
-      try {
-        await this.pending.attempts.assertNetworkAllowed(
-          associated.record,
-          context.attempt?.attempt.ownerToken
-        )
-      } catch (error) {
-        if (error instanceof PendingCommandAttemptUnsafeError) {
-          throw unsafeScanFailure([error.invalidEntry])
-        }
-        if (error instanceof PendingCommandAttemptBusyError) {
-          throw dependencyFailure(
-            "Another Command recovery attempt is in progress; no request was sent.",
-            EXIT_CODE.retryable,
-            { reason: "command_attempt_in_progress" }
-          )
-        }
-        throw error
-      }
     }
 
     const located = await this.local.requireLocated()
@@ -372,7 +338,7 @@ export class CommandQueryService {
       associated !== null &&
       !pendingCredentialScopeMatches(associated.record, currentScope(located))
     ) {
-      await this.markOrphaned(associated, context.attempt?.attempt.ownerToken)
+      await this.markOrphaned(associated)
       throw blockedFailure(associated, "orphaned_credential")
     }
 
@@ -393,7 +359,7 @@ export class CommandQueryService {
     if (decision.action === "retain_unknown") {
       throw dependencyFailure(
         "The server returned invalid Command query evidence; local evidence was retained.",
-        EXIT_CODE.retryable,
+        decision.exitCode,
         { responseKind: "invalid_command_response" }
       )
     }
@@ -412,49 +378,25 @@ export class CommandQueryService {
           if (decision.command === null) {
             throw new Error("Command GET final decision omitted its Command.")
           }
-          await settlePendingCommand(
-            this.pending,
-            associated.record,
-            {
-              kind: "final",
-              commandId: decision.command.commandId,
-            },
-            {
-              attemptOwnerToken: context.attempt?.attempt.ownerToken,
-            }
-          )
+          await settlePendingCommand(this.pending, associated.record, {
+            kind: "final",
+            commandId: decision.command.commandId,
+          })
         } else {
-          await settlePendingCommand(
-            this.pending,
-            associated.record,
-            {
-              kind: "command_known",
-              commandId: decision.command.commandId,
-              updatedAt: monotonicTimestamp(associated.record, this.now()),
-              lastResponse: responseFact(response),
-            },
-            {
-              attemptOwnerToken: context.attempt?.attempt.ownerToken,
-            }
-          )
+          await settlePendingCommand(this.pending, associated.record, {
+            kind: "command_known",
+            commandId: decision.command.commandId,
+            updatedAt: monotonicTimestamp(associated.record, this.now()),
+            lastResponse: responseFact(response),
+          })
         }
       } catch (error) {
         if (error instanceof CliFailure) throw error
-        if (
-          error instanceof PendingCommandAttemptBusyError &&
-          context.attempt === undefined
-        ) {
-          // GET 与新 Status reservation 交错：远端事实仍可返回，但本地
-          // settlement 让唯一 POST owner 完成，避免双响应排序。
-        } else if (error instanceof PendingCommandAttemptUnsafeError) {
-          throw unsafeScanFailure([error.invalidEntry])
-        } else {
-          throw dependencyFailure(
-            "The Command response was received, but local recovery evidence changed; retry the GET.",
-            EXIT_CODE.retryable,
-            { recordId: associated.recordId }
-          )
-        }
+        throw dependencyFailure(
+          "The Command response was received, but local recovery evidence changed; retry the GET.",
+          EXIT_CODE.retryable,
+          { recordId: associated.recordId }
+        )
       }
     }
 
@@ -494,8 +436,7 @@ export class CommandQueryService {
   }
 
   private async markOrphaned(
-    associated: PendingCommandRecordEntry,
-    attemptOwnerToken?: string
+    associated: PendingCommandRecordEntry
   ): Promise<void> {
     const next: PendingCommandRecord = {
       ...associated.record,
@@ -503,9 +444,7 @@ export class CommandQueryService {
       updatedAt: monotonicTimestamp(associated.record, this.now()),
     }
     try {
-      await this.pending.replaceExact(associated.record, next, {
-        attemptOwnerToken,
-      })
+      await this.pending.replaceExact(associated.record, next)
     } catch {
       const current = await this.pending.read(associated.record.idempotencyKey)
       if (

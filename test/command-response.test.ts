@@ -13,6 +13,7 @@ const PENDING_UNTIL = "2026-08-01T08:00:00.000Z"
 const RECOVERY_UNTIL = "2026-08-07T08:00:00.000Z"
 const EXPECTED = Object.freeze({
   idempotencyKey: "abc_DEF-9",
+  capabilityId: "ads.campaign.status.write",
   intent: Object.freeze({
     advId: "70001",
     campaignId: "80001",
@@ -156,7 +157,7 @@ describe("Status Command response evidence", () => {
     })
     expect(decideStatusPendingCommand(response, 202, EXPECTED)).toMatchObject({
       action: "retain_command",
-      exitCode: 0,
+      exitCode: 4,
       contractViolation: null,
     })
   })
@@ -236,7 +237,7 @@ describe("Status Command response evidence", () => {
     }
   })
 
-  it("operationUnitsCharged=null keeps ambiguous evidence and exits 4", () => {
+  it("operationUnitsCharged=null does not override Command evidence", () => {
     const response = error({
       retryable: true,
       details: {},
@@ -244,7 +245,7 @@ describe("Status Command response evidence", () => {
     })
     expect(decideStatusPendingCommand(response, 503, EXPECTED)).toMatchObject({
       action: "retain_unknown",
-      exitCode: 4,
+      exitCode: 5,
       command: null,
     })
 
@@ -256,9 +257,9 @@ describe("Status Command response evidence", () => {
     expect(
       decideStatusPendingCommand(contradictoryNotCreated, 503, EXPECTED)
     ).toMatchObject({
-      action: "retain_unknown",
+      action: "remove",
       exitCode: 4,
-      contractViolation: "invalid_command_response",
+      contractViolation: null,
     })
 
     const contradictoryFinal = error({
@@ -269,10 +270,10 @@ describe("Status Command response evidence", () => {
     expect(
       decideStatusPendingCommand(contradictoryFinal, 503, EXPECTED)
     ).toMatchObject({
-      action: "retain_unknown",
-      exitCode: 4,
-      command: null,
-      contractViolation: "invalid_command_response",
+      action: "remove",
+      exitCode: 1,
+      command: { status: "failed", isFinal: true },
+      contractViolation: null,
     })
   })
 
@@ -286,14 +287,14 @@ describe("Status Command response evidence", () => {
     })
   })
 
-  it("rejects wrong identity, malformed Command and error/Command mismatch", () => {
+  it("rejects wrong identity and error/Command mismatch", () => {
     const cases = [
       success(
         pendingCommand({
           idempotencyKey: "different_key",
         })
       ),
-      success({ ...pendingCommand(), accessToken: "must-not-pass" }),
+      success(pendingCommand({ capabilityId: "future.write" })),
       error({
         retryable: false,
         details: { commandCreated: true, command: pendingCommand() },
@@ -305,21 +306,61 @@ describe("Status Command response evidence", () => {
       )
     }
   })
+
+  it("tolerates extra fields on a valid Command DTO", () => {
+    const result = decideStatusPendingCommand(
+      success({ ...pendingCommand(), accessToken: "extra" }),
+      200,
+      EXPECTED
+    )
+    expect(result.exitCode).not.toBe(5)
+  })
+
+  it("never reports success without exact positive evidence", () => {
+    for (const command of [
+      { ...succeededCommand(), verificationBasis: null },
+      { ...succeededCommand(), beforeStatus: "DISABLE" },
+      {
+        ...succeededCommand(),
+        verificationBasis: "observed_target_state",
+        afterStatus: "DISABLE",
+      },
+      { ...succeededCommand(), isFinal: false },
+    ]) {
+      const result = decideStatusPendingCommand(
+        success(command),
+        200,
+        EXPECTED
+      )
+      expect(result.exitCode).toBe(5)
+      expect(result.action).toBe("retain_unknown")
+    }
+  })
+
+  it("maps final failed and unknown facts in success envelopes to nonzero", () => {
+    expect(
+      decideStatusPendingCommand(success(failedCommand()), 200, EXPECTED)
+    ).toMatchObject({ action: "remove", exitCode: 1 })
+    expect(
+      decideStatusPendingCommand(success(unknownCommand(true)), 200, EXPECTED)
+    ).toMatchObject({ action: "remove", exitCode: 5 })
+  })
 })
 
 describe("Command GET response evidence", () => {
   it.each([
-    [pendingCommand(), "retain_command"],
-    [unknownCommand(false), "retain_command"],
-    [succeededCommand(), "remove"],
-    [unknownCommand(true), "remove"],
+    [pendingCommand(), "retain_command", 4],
+    [unknownCommand(false), "retain_command", 5],
+    [succeededCommand(), "remove", 0],
+    [failedCommand(), "remove", 1],
+    [unknownCommand(true), "remove", 5],
   ] as const)(
     "maps every valid GET state without inventing HTTP 202",
-    (command, action) => {
+    (command, action, exitCode) => {
       const response = success(command)
       expect(decideCommandGetPendingCommand(response, EXPECTED)).toMatchObject({
         action,
-        exitCode: 0,
+        exitCode,
       })
     }
   )

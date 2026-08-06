@@ -11,6 +11,7 @@ import { sha256SkillText } from "../src/skills/skill-contract.js"
 const execFileAsync = promisify(execFile)
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const VALIDATOR = join(CLI_ROOT, "scripts", "validate-skill-assets.mjs")
+const RESEALER = join(CLI_ROOT, "scripts", "reseal-skill-assets.mjs")
 const roots: Array<string> = []
 
 async function fixture(): Promise<string> {
@@ -104,30 +105,6 @@ describe("build-time Skills asset validator", () => {
       },
     ],
     [
-      "self-consistent version",
-      async (root: string) => {
-        const shellPath = join(root, "skills", "adrate-ads", "SKILL.md")
-        const manifestPath = join(
-          root,
-          "skills",
-          "adrate-ads",
-          "skill-manifest.json"
-        )
-        const shell = (await readFile(shellPath, "utf8")).replace(
-          'version: "1.0.0"',
-          'version: "1.0.1"'
-        )
-        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-          version: string
-          shellSha256: string
-        }
-        manifest.version = "1.0.1"
-        manifest.shellSha256 = sha256SkillText(shell)
-        await writeFile(shellPath, shell)
-        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-      },
-    ],
-    [
       "openai.yaml",
       async (root: string) => {
         const path = join(
@@ -137,19 +114,61 @@ describe("build-time Skills asset validator", () => {
           "agents",
           "openai.yaml"
         )
-        await writeFile(
-          path,
-          (await readFile(path, "utf8")).replace(
-            "Safe authentication, recovery, and CLI operation",
-            "Drifted description"
-          )
-        )
+        await writeFile(path, "invalid\n")
       },
     ],
   ] as const)("rejects %s drift", async (_label, mutate) => {
     const root = await fixture()
     await mutate(root)
     await expectValidatorFailure(root)
+  })
+
+  it("accepts valid OpenAI metadata without a compiled prose copy", async () => {
+    const root = await fixture()
+    const path = join(root, "skills", "adrate-shared", "agents", "openai.yaml")
+    await writeFile(
+      path,
+      (await readFile(path, "utf8")).replace(
+        "Safe authentication, feedback, recovery, and CLI operation",
+        "Updated authentication and CLI operation"
+      )
+    )
+    await expect(validateSkillAssets(root)).resolves.toBeUndefined()
+  })
+
+  it("reseals changed author assets deterministically", async () => {
+    const root = await fixture()
+    const shellPath = join(root, "skills", "adrate-ads", "SKILL.md")
+    const contentPath = join(root, "skills-content", "adrate-ads", "SKILL.md")
+    const manifestPath = join(
+      root,
+      "skills",
+      "adrate-ads",
+      "skill-manifest.json"
+    )
+    const shell = (await readFile(shellPath, "utf8")).replace(
+      'version: "1.0.0"',
+      'version: "1.0.1"'
+    )
+    const content = `${(await readFile(contentPath, "utf8")).trimEnd()}\n\nNew guidance.\n`
+    await writeFile(shellPath, shell)
+    await writeFile(contentPath, content)
+
+    const firstRun = await execFileAsync(process.execPath, [RESEALER, root])
+    expect(firstRun.stdout).toBe("Skills asset manifests resealed.\n")
+    await expect(validateSkillAssets(root)).resolves.toBeUndefined()
+
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      version: string
+      shellSha256: string
+      contentSha256: string
+    }
+    expect(manifest.version).toBe("1.0.1")
+    expect(manifest.shellSha256).toBe(sha256SkillText(shell))
+    expect(manifest.contentSha256).toBe(sha256SkillText(content))
+    const firstManifest = await readFile(manifestPath, "utf8")
+    await execFileAsync(process.execPath, [RESEALER, root])
+    await expect(readFile(manifestPath, "utf8")).resolves.toBe(firstManifest)
   })
 
   it("blocks the real pnpm build script before tsup when assets drift", async () => {

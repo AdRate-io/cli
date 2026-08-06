@@ -41,8 +41,12 @@ describe("Agent Skill publication contracts", () => {
       expect(manifest).not.toBeNull()
       expect(normalizeSkillText(shell)).toBe(shell)
       expect(normalizeSkillText(content)).toBe(content)
-      expect(manifest?.version).toBe("1.0.0")
-      expect(manifest?.minCliVersion).toBe("0.1.0")
+      expect(manifest?.version).toBe(
+        name === "adrate-shared" ? "1.1.0" : "1.0.0"
+      )
+      expect(manifest?.minCliVersion).toBe(
+        name === "adrate-shared" ? "0.1.0-beta.6" : "0.1.0"
+      )
       expect(manifest?.shellSha256).toBe(sha256SkillText(shell))
       expect(manifest?.contentSha256).toBe(sha256SkillText(content))
       expect(
@@ -83,7 +87,7 @@ describe("Agent Skill publication contracts", () => {
     ]) {
       expect(
         parseSkillFrontmatter(
-          shell.replace('version: "1.0.0"', `version: ${replacement}`)
+          shell.replace('version: "1.1.0"', `version: ${replacement}`)
         )
       ).toBeNull()
     }
@@ -102,10 +106,10 @@ describe("Agent Skill publication contracts", () => {
     ).toBeNull()
   })
 
-  it("contains all fourteen shared safety contracts and the explicit M0 boundary", async () => {
+  it("contains all fifteen shared safety contracts and the explicit M0 boundary", async () => {
     const shared = await asset("skills-content", "adrate-shared")
     for (const heading of Array.from(
-      { length: 14 },
+      { length: 15 },
       (_, index) => `## ${index + 1}.`
     )) {
       expect(shared).toContain(heading)
@@ -118,7 +122,14 @@ describe("Agent Skill publication contracts", () => {
       "unknown` with `isFinal=true",
       "meta.pagination",
       "pending write record is bound to the credential",
-      "operationUnitsCharged=null",
+      "insufficient success evidence exits 5",
+      "operationUnitsCharged",
+      "Never call it automatically after CLI errors",
+      "same category, the exact same message, and that same key",
+      "Never concatenate free text into a shell command string",
+      "Authorization/Cookie values",
+      "does not attach hostname, cwd, paths, shell history",
+      "cannot prove that a message is safe",
       "does not support arbitrary base URLs",
       "Device Token delivery",
       "Logout revoke",

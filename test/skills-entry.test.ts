@@ -30,9 +30,13 @@ function harness(notifier?: { inspect: () => Promise<never> }) {
       pending: vi.fn(() => Promise.resolve(success("pending"))),
     },
     commandResume: { resume: vi.fn(() => Promise.resolve(success("resume"))) },
+    feedback: { submit: vi.fn(() => Promise.resolve(success("feedback"))) },
     skills: {
       list: vi.fn(() => Promise.resolve(success("skills-list"))),
       read: vi.fn(() => Promise.resolve(success("skills-read"))),
+    },
+    skillsInstall: {
+      install: vi.fn(() => Promise.resolve(success("skills-install"))),
     },
   }
   return {
@@ -109,6 +113,21 @@ describe("Skills parser and application entry", () => {
     })
     expect(value.auth.login).not.toHaveBeenCalled()
     expect(value.auth.status).not.toHaveBeenCalled()
+    expect(value.reads.execute).not.toHaveBeenCalled()
+  })
+
+  it("parses and dispatches skills install without auth or network", async () => {
+    expect(parseArguments(["skills", "install"]).command).toStrictEqual({
+      kind: "skills.install",
+    })
+    const value = harness()
+    await expect(
+      value.application.execute(["skills", "install"])
+    ).resolves.toMatchObject({
+      outcome: { envelope: { data: { label: "skills-install" } } },
+    })
+    expect(value.commands.skillsInstall.install).toHaveBeenCalledTimes(1)
+    expect(value.auth.login).not.toHaveBeenCalled()
     expect(value.reads.execute).not.toHaveBeenCalled()
   })
 

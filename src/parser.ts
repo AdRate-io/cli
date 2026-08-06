@@ -16,6 +16,7 @@ export type ParsedCommand =
       kind: "auth.login"
       noWait: boolean
       resume: boolean
+      device: boolean
       deviceName?: string
     }
   | { kind: "auth.status" }
@@ -57,7 +58,14 @@ export type ParsedCommand =
   | { kind: "commands.get"; commandId?: string }
   | { kind: "commands.pending" }
   | { kind: "commands.resume" }
+  | {
+      kind: "feedback.submit"
+      category?: string
+      message?: string
+      messageStdin: boolean
+    }
   | { kind: "skills.list" }
+  | { kind: "skills.install" }
   | { kind: "skills.read"; name?: string; path?: string }
 
 export type ReadCommand = Extract<
@@ -90,6 +98,8 @@ const BOOLEAN_FLAGS = new Set([
   "--version",
   "--no-wait",
   "--resume",
+  "--device",
+  "--message-stdin",
 ])
 const VALUE_FLAGS = new Set([
   "--request-id",
@@ -105,6 +115,8 @@ const VALUE_FLAGS = new Set([
   "--start-date",
   "--end-date",
   "--group-by",
+  "--category",
+  "--message",
 ])
 
 interface TokenizedArguments {
@@ -139,7 +151,11 @@ function tokenize(argv: ReadonlyArray<string>): TokenizedArguments {
       continue
     }
     const value = inlineValue ?? argv[index + 1]
-    if (value === undefined || value.length === 0 || value.startsWith("--")) {
+    if (
+      value === undefined ||
+      value.length === 0 ||
+      (inlineValue === undefined && value.startsWith("--"))
+    ) {
       throw usageFailure(`Option requires a value: ${name}`)
     }
     if (inlineValue === undefined) index += 1
@@ -201,6 +217,8 @@ const FIXED_POSITIONAL_SHAPES: ReadonlyArray<{
   { prefix: ["commands", "get"], maximum: 2 },
   { prefix: ["commands", "pending"], maximum: 2 },
   { prefix: ["commands", "resume"], maximum: 2 },
+  { prefix: ["feedback"], maximum: 1 },
+  { prefix: ["skills", "install"], maximum: 2 },
   { prefix: ["skills", "list"], maximum: 2 },
   { prefix: ["skills", "read"], maximum: 4 },
 ]
@@ -258,13 +276,14 @@ export function parseArguments(argv: ReadonlyArray<string>): ParsedInvocation {
     case "auth login":
       assertOnlyFlags(
         flags,
-        ["--no-wait", "--resume", "--device-name"],
+        ["--no-wait", "--resume", "--device", "--device-name"],
         ["--test"]
       )
       command = {
         kind: "auth.login",
         noWait: flags.has("--no-wait"),
         resume: flags.has("--resume"),
+        device: flags.has("--device"),
         ...(stringFlag(flags, "--device-name")
           ? { deviceName: stringFlag(flags, "--device-name") }
           : {}),
@@ -394,6 +413,47 @@ export function parseArguments(argv: ReadonlyArray<string>): ParsedInvocation {
       }
       command = { kind: "commands.resume" }
       break
+    case "feedback": {
+      assertOnlyFlags(flags, ["--category", "--message", "--message-stdin"])
+      const category = stringFlag(flags, "--category")
+      const message = stringFlag(flags, "--message")
+      const messageStdin = flags.has("--message-stdin")
+      if (
+        category !== undefined &&
+        category !== "blocked" &&
+        category !== "bug" &&
+        category !== "suggestion" &&
+        category !== "other"
+      ) {
+        throw usageFailure(
+          "--category must be blocked, bug, suggestion, or other."
+        )
+      }
+      if (message !== undefined && messageStdin) {
+        throw usageFailure(
+          "Exactly one of --message or --message-stdin is required."
+        )
+      }
+      if (!help) {
+        if (category === undefined) throw usageFailure("--category is required.")
+        if (message === undefined && !messageStdin) {
+          throw usageFailure(
+            "Exactly one of --message or --message-stdin is required."
+          )
+        }
+      }
+      command = {
+        kind: "feedback.submit",
+        category,
+        message,
+        messageStdin,
+      }
+      break
+    }
+    case "skills install":
+      assertOnlyFlags(flags, [])
+      command = { kind: "skills.install" }
+      break
     case "skills list":
       assertOnlyFlags(flags, [])
       command = { kind: "skills.list" }
@@ -458,7 +518,7 @@ Usage:
   adrate <command> [options]
 
 Commands:
-  auth login [--no-wait|--resume]  Authorize this device
+  auth login [--no-wait|--resume|--device]  Authorize this device
   auth status                      Diagnose local and remote auth state
   auth whoami                      Show and activate the current identity
   auth logout                      Revoke and remove the current credential
@@ -472,14 +532,17 @@ Commands:
   commands get                      Query one server Command
   commands pending                  List local recovery evidence
   commands resume                   Explicitly recover one pending write
+  feedback                          Submit explicit Agent or user feedback
+  skills install                    Install Agent Skills locally (no git)
   skills list                       List bundled Agent Skills
   skills read <name> [path]         Read bundled Skill content
 
 Global options:
-  --json                 Emit exactly one JSON envelope on stdout
+  --json                 Emit one JSON envelope on stdout; auth login --device
+                         first emits its separate device-code JSON line
   --no-input             Never prompt or wait implicitly
   --request-id <id>      Set the trace request ID
-  --idempotency-key <k>  Status write/get-by-key/resume selector
+  --idempotency-key <k>  Write retry or Command recovery selector
   --verbose              Emit sanitized diagnostics on stderr
   --test                 Select test only when issuing a new Device flow
   --help                 Show help
@@ -490,12 +553,15 @@ Exit codes: 0 success, 1 business failure, 2 usage, 3 authentication,
 development issuers, team switching, automatic pagination, or batch writes.`
 
 const COMMAND_HELP: Readonly<Record<string, string>> = Object.freeze({
-  "auth login": `Usage: adrate auth login [--no-wait|--resume] [--device-name <name>]
+  "auth login": `Usage: adrate auth login [--no-wait|--resume|--device] [--device-name <name>]
 
-Creates or resumes the fixed five-scope Device Authorization flow. --no-wait
+Creates or resumes the fixed M0-scope Device Authorization flow. --no-wait
 returns the browser URL without waiting. --resume uses the protected local
-Device state. --no-input never waits. A delivery-unknown Token exchange exits 5
-and must not be blindly restarted.`,
+Device state. --device emits a single JSON line with device-code fields on
+stdout then continues polling until approval or expiry (for machine consumers
+such as Accio Work). With --json, the final envelope is a second JSON line.
+--no-input never waits. A delivery-unknown Token exchange exits 5 and must not
+be blindly restarted.`,
   "auth status": `Usage: adrate auth status
 
 Returns not_authenticated, local_incomplete, active, or remote_invalid.
@@ -558,11 +624,30 @@ never deleted.`,
 Explicitly queries the original Command first. It may repeat the exact original
 Status POST only when the server proves no Command exists or returns pending.
 It never posts for executing, unknown, final, expired, or prior-credential state.`,
+  feedback: `Usage: adrate feedback --category blocked|bug|suggestion|other (--message <text> | --message-stdin) [--idempotency-key <key>]
+
+Submits one explicit feedback message. Free text should use --message-stdin or a
+single --message=<text> argv token, never shell string concatenation. Text that
+starts with -- must use the equals form. The CLI sends at most one
+15-second POST and never retries or stores feedback pending state automatically.
+If the response is not confirmed, reuse the printed key only with the exact same
+category and message.
+
+Before submission, remove Tokens, Authorization/Cookie values, passwords, device
+codes, TikTok access tokens, personal information, full ad payloads, environment
+variables, logs, and stack traces. --message may remain in shell history or argv;
+prefer stdin. The CLI attaches only its version, platform-architecture, and Node
+version, never hostname, cwd, paths, shell history, or environment variables.
+Server redaction is only a fallback and cannot prove that a message is safe.`,
+  "skills install": `Usage: adrate skills install
+
+Copies both bundled M0 Agent Skills from the installed npm package to
+~/.agents/skills/<name>/. Zero network, zero git. Existing files are overwritten
+only when version or content differs. Safe to run repeatedly.`,
   "skills list": `Usage: adrate skills list
 
 Lists the two bundled M0 Agent Skills in stable name order. This local command
-does not read credentials. After the result is ready, it may run the suppressible
-anonymous update check; ADRATE_NO_UPDATE_NOTIFIER=1 keeps the whole command local.`,
+does not read credentials.`,
   "skills read": `Usage: adrate skills read <name> [path]
 
 Reads one UTF-8 file from a known bundled Skill root. The default path is
@@ -584,7 +669,7 @@ development issuer.`
 
 const INSTALL_HELP = `Install CLI and Agent Skills (both steps are required):
   npm install -g @adrate/cli
-  npx skills add AdRate-io/cli -g -y`
+  adrate skills install`
 
 export function helpText(topic: string): string {
   const command = COMMAND_HELP[topic]

@@ -35,20 +35,12 @@ export type OAuthPollClassification =
       nextPollDelaySeconds: number
       retryAfterSeconds: number | null
     }
-  | {
-      kind: "verification_unknown"
-      oauthError: string
-      protocolIntervalSeconds: number
-      nextPollDelaySeconds: number
-      retryAfterSeconds: number | null
-    }
 
 /** 纯分类器，不写本地状态、不发网络、不决定 CLI 输出。 */
 export function classifyOAuthPollResponse(input: {
   response: Pick<HttpResponse, "status" | "text" | "headers">
   receivedAt: string
   protocolIntervalSeconds: number
-  deliveryVerification: boolean
 }): OAuthPollClassification {
   const { response } = input
   if (response.status >= 200 && response.status < 300) {
@@ -63,42 +55,6 @@ export function classifyOAuthPollResponse(input: {
     return response.status >= 500
       ? { kind: "delivery_unknown", responseKind: "server_non_json" }
       : { kind: "invalid_error", oauthError: null }
-  }
-
-  if (input.deliveryVerification) {
-    if (error.error === "access_denied" || error.error === "expired_token") {
-      return { kind: "terminal", oauthError: error.error }
-    }
-    const retryAfterSeconds =
-      error.error === "slow_down"
-        ? parseRetryAfter(response.headers, 30)
-        : error.error === "temporarily_unavailable"
-          ? parseRetryAfter(response.headers)
-          : null
-    const protocolIntervalSeconds =
-      error.error === "slow_down"
-        ? resolveSlowDownProtocolInterval({
-            previousProtocolIntervalSeconds: input.protocolIntervalSeconds,
-            retryAfterSeconds:
-              retryAfterSeconds ??
-              Math.min(30, input.protocolIntervalSeconds + 5),
-          })
-        : input.protocolIntervalSeconds
-    const nextPollDelaySeconds =
-      error.error === "temporarily_unavailable"
-        ? resolveTemporaryUnavailablePollSchedule({
-            responseReceivedAt: input.receivedAt,
-            protocolIntervalSeconds,
-            retryAfterSeconds,
-          }).nextPollDelaySeconds
-        : protocolIntervalSeconds
-    return {
-      kind: "verification_unknown",
-      oauthError: error.error,
-      protocolIntervalSeconds,
-      nextPollDelaySeconds,
-      retryAfterSeconds,
-    }
   }
 
   if (error.error === "authorization_pending") {

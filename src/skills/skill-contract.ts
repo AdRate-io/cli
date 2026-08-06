@@ -1,6 +1,4 @@
 export {
-  EXPECTED_OPENAI_CONFIGS,
-  EXPECTED_SKILL_MANIFESTS,
   SKILL_NAMES,
   compareSemver,
   isValidSemver,

@@ -30,13 +30,6 @@ export interface OpenAiConfig {
   defaultPrompt: string
 }
 
-export const EXPECTED_SKILL_MANIFESTS: Readonly<
-  Record<SkillName, Readonly<SkillManifest>>
->
-export const EXPECTED_OPENAI_CONFIGS: Readonly<
-  Record<SkillName, Readonly<OpenAiConfig>>
->
-
 export function normalizeSkillText(value: string): string
 export function sha256SkillText(value: string): string
 export function isValidSemver(value: unknown): value is string

@@ -5,7 +5,6 @@ import {
   compareSemver,
   parseSkillFrontmatter,
   parseSkillManifest,
-  shellMatchesManifest,
 } from "./skill-contract.js"
 import { SkillPathReader } from "./skill-path-reader.js"
 import type { CliEnvelope } from "../contracts/envelope.js"
@@ -18,7 +17,7 @@ import type {
   SkillName,
 } from "./skill-contract.js"
 
-export type SkillsIssueCode = "missing" | "outdated" | "content_drift"
+export type SkillsIssueCode = "missing" | "outdated"
 
 export interface SkillsNoticeIssue {
   name: string
@@ -37,7 +36,7 @@ export interface SkillsNotice {
   required: Array<SkillsNoticeRequired>
   issues: Array<SkillsNoticeIssue>
   suggestedAction: "install_skills"
-  command: "npx skills add AdRate-io/cli -g -y"
+  command: "adrate skills install"
 }
 
 export interface SkillsNotifierInspection {
@@ -47,15 +46,7 @@ export interface SkillsNotifierInspection {
 
 interface InstalledSkill {
   shell: SkillFrontmatter
-  shellSha256: string
   manifest: SkillManifest
-}
-
-function expectedMatchesInstalled(
-  expected: SkillManifest,
-  installed: SkillManifest
-): boolean {
-  return JSON.stringify(expected) === JSON.stringify(installed)
 }
 
 function asNoticeObject(notice: SkillsNotice): JsonObject {
@@ -100,7 +91,7 @@ export class SkillsNotifier {
       const shell = parseSkillFrontmatter(shellFile.content)
       const manifest = parseSkillManifest(manifestFile.content, name)
       if (!shell || !manifest || shell.name !== name) return null
-      return { shell, shellSha256: shellFile.sha256, manifest }
+      return { shell, manifest }
     } catch {
       return null
     }
@@ -119,29 +110,6 @@ export class SkillsNotifier {
       compareSemver(installed.manifest.version, expected.version) < 0
     ) {
       return { name: expected.name, code: "outdated", installedVersion }
-    }
-    if (
-      !shellMatchesManifest({
-        shell: installed.shell,
-        shellSha256: installed.shellSha256,
-        manifest: installed.manifest,
-      })
-    ) {
-      return {
-        name: expected.name,
-        code: "content_drift",
-        installedVersion,
-      }
-    }
-    if (
-      compareSemver(installedVersion, expected.version) === 0 &&
-      !expectedMatchesInstalled(expected, installed.manifest)
-    ) {
-      return {
-        name: expected.name,
-        code: "content_drift",
-        installedVersion,
-      }
     }
     return null
   }
@@ -174,7 +142,7 @@ export class SkillsNotifier {
         required,
         issues,
         suggestedAction: "install_skills",
-        command: "npx skills add AdRate-io/cli -g -y",
+        command: "adrate skills install",
       }
       return {
         notice,

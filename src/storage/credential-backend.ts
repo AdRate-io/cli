@@ -3,17 +3,17 @@ import { Buffer } from "node:buffer"
 import { parseOwnerSessionToken } from "../contracts/oauth.js"
 import { dependencyFailure, usageFailure } from "../errors.js"
 import type { SecureFileSystem } from "./secure-files.js"
-import type {
-  AuthCleanupCredentialLocator,
-  TokenIndex,
-  TokenStorageKind,
-} from "./schemas.js"
+import type { TokenIndex, TokenStorageKind } from "./schemas.js"
 import type { CliPaths } from "./paths.js"
 
 export interface CredentialAddress {
   issuerOrigin: string
   credentialKind: "owner_cli_session"
   credentialId: string
+}
+
+export interface CredentialLocator extends CredentialAddress {
+  storageKind: TokenStorageKind
 }
 
 export interface CredentialBackend {
@@ -382,7 +382,7 @@ export class CredentialStore {
     index: TokenIndex | null,
     fallbackExists: boolean
   ): Promise<void> {
-    const locator: AuthCleanupCredentialLocator | null = index
+    const locator: CredentialLocator | null = index
       ? {
           issuerOrigin: index.issuerOrigin,
           credentialKind: index.credentialKind,
@@ -394,11 +394,10 @@ export class CredentialStore {
   }
 
   /**
-   * Cleanup reservation 冻结的定位信息是唯一授权来源。该方法不读取当前
-   * token index，避免 secret 删除后崩溃重入时误用后来的新 generation。
+   * 使用 auth lock 内冻结的 locator，不在删除过程中重读 TokenIndex。
    */
   async removeAuthenticationArtifactsAt(
-    locator: AuthCleanupCredentialLocator | null,
+    locator: CredentialLocator | null,
     fallbackExists: boolean
   ): Promise<void> {
     await this.removeFallbackAuthenticationArtifactAt(locator, fallbackExists)
@@ -407,10 +406,10 @@ export class CredentialStore {
 
   /**
    * fallback 是全局固定路径，调用时必须持有 auth lock 且确保
-   * cleanup reservation 仍存在，否则旧删除者可能误删 ABA 后的新 Token。
+   * 同一 auth lock 内的身份比较仍有效，否则旧删除者可能误删新 Token。
    */
   async removeFallbackAuthenticationArtifactAt(
-    locator: AuthCleanupCredentialLocator | null,
+    locator: CredentialLocator | null,
     fallbackExists: boolean
   ): Promise<void> {
     if (fallbackExists || locator?.storageKind === "fallback_file") {
@@ -418,9 +417,9 @@ export class CredentialStore {
     }
   }
 
-  /** Keychain 地址含冻结 credentialId，可在 auth lock 外执行慢 I/O。 */
+  /** Keychain 地址含冻结 credentialId；登出时在 auth lock 内精确删除。 */
   async removeKeychainAuthenticationArtifactAt(
-    locator: AuthCleanupCredentialLocator | null
+    locator: CredentialLocator | null
   ): Promise<void> {
     if (locator?.storageKind === "keychain") {
       await this.keychain.remove(this.addressFor(locator))
@@ -502,7 +501,7 @@ export class CredentialStore {
   }
 
   private fallbackCleanupAddress(
-    locator: AuthCleanupCredentialLocator | null
+    locator: CredentialLocator | null
   ): CredentialAddress {
     if (locator) return this.addressFor(locator)
     return {

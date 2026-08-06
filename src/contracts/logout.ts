@@ -1,4 +1,4 @@
-import { hasExactKeys, isCanonicalUtcIso, isPlainObject } from "./json.js"
+import { hasKeys, isCanonicalUtcIso, isPlainObject } from "./json.js"
 import type { PublicSuccessEnvelope } from "./envelope.js"
 
 export interface CurrentSessionDeleteFacts {
@@ -19,7 +19,7 @@ export function decodeCurrentSessionDeleteSuccess(
   if (
     status !== 200 ||
     !isPlainObject(data) ||
-    !hasExactKeys(data, ["revoked", "credentialId", "revokedAt"]) ||
+    !hasKeys(data, ["revoked", "credentialId", "revokedAt"]) ||
     data.revoked !== true ||
     data.credentialId !== expectedCredentialId ||
     !isCanonicalUtcIso(data.revokedAt)

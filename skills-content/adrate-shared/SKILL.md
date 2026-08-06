@@ -50,8 +50,8 @@ For `DAILY_QUOTA_EXCEEDED`, stop immediately. It may use HTTP 429, but it is a d
 
 A write key identifies exactly one advertiser, Campaign, desired status, authorization, issuer, and credential. Never reuse it for a different intent.
 
-- When Status returns `pending` with `retryable=true` and exit 4, preserve the key and use only `commands resume` after the requested delay.
-- When Status returns HTTP 202 with an unexpired `unknown` Command and `isFinal=false`, exit 0 means the Command was accepted for inspection. Query it; do not POST again.
+- When Status returns `pending` or `executing` with exit 4, preserve the key and follow the requested wait before querying or using the qualified `commands resume` path.
+- When Status returns `unknown`, an unfamiliar future status, or insufficient success evidence with exit 5, query by the original key first. Do not issue a fresh-key POST.
 - When the Status response is lost and the CLI exits 5, query by the original key first.
 
 ```sh
@@ -67,12 +67,12 @@ Never generate a new key to repeat the same write after any of these outcomes.
 Exit 5 means an irreversible or one-time remote outcome is unknown and must not be retried blindly. It does not always mean query a Command.
 
 - Campaign Status: recover with the original idempotency key through `commands get`, `commands pending`, or the qualified `commands resume` path.
-- Device Token delivery: the CLI records `attemptedAt`; verify once using the same locally protected `device_code`, then obey `safeRestartAt`. Do not start overlapping Device flows.
+- Device Token delivery: the CLI discards the interrupted local Device attempt. Do not manually reuse a `device_code`; the next login starts a fresh Device flow.
 - Logout revoke: verify and revoke through the official AdRate Web device page. Do not assume the remote credential survived or disappeared.
 
 ## 8. Distinguish Command query from Status acceptance
 
-`commands get` is a GET query. A Command in `pending`, `executing`, or `unknown` state is still an HTTP 200 and CLI exit 0 response. A Status POST may return HTTP 202 only for a non-final Command. In both cases inspect the Command's `status` and `isFinal`; never infer finality from HTTP status alone.
+`commands get` is a GET query, but HTTP 200 does not prove operation success. `pending` or `executing` with `isFinal=false` exits 4; `unknown`, an unfamiliar future status, or insufficient success evidence exits 5. A Status POST may return HTTP 202 only for a non-final Command and follows the same outcome rules. Inspect the Command's status, finality, target, and verification evidence; never infer success from HTTP status alone.
 
 ```sh
 adrate commands get --command-id 018f15d1-7d8f-7ea1-a492-8b7f8271fc6e --json
@@ -80,7 +80,7 @@ adrate commands get --command-id 018f15d1-7d8f-7ea1-a492-8b7f8271fc6e --json
 
 ## 9. Query only Commands that can still change
 
-Only a Command with `isFinal=false` remains worth polling. Use bounded polling and any Retry-After guidance. `status=unknown` with `isFinal=true` is final uncertainty: it will not change, but it is neither proven success nor proven failure. Report that uncertainty without inventing a result.
+Only a Command with `isFinal=false` remains worth bounded polling. Honor any Retry-After guidance. `status=unknown` with `isFinal=true` is final uncertainty: it will not change, but it is neither proven success nor proven failure. Report that uncertainty without inventing a result.
 
 ## 10. Page deliberately
 
@@ -103,9 +103,31 @@ The Owner must perform identity login, TikTok OAuth, payment, and clarification 
 
 Every pending write record is bound to the credential that created it. Logout and reauthorization do not transfer that authority. Never resume an old record using a new credential. If the CLI reports a credential mismatch, fail loudly and ask the Owner to verify the operation manually; do not delete or rewrite the evidence.
 
-## 14. Treat unknown unit charging as unknown
+## 14. Treat unit charging as diagnostic evidence
 
-`operationUnitsCharged=null` means the daily operation-unit reservation result is unknown. Units may already have been charged or may not have been charged. A read retry can charge again. For Status, preserve the original key and use `commands resume` so the server-side marker can converge; never convert null to zero or issue a fresh-key write.
+`operationUnitsCharged` never decides whether a Command succeeded. Use Command status, finality, target, and verification evidence for the outcome. If the field is `null`, keep it as unknown diagnostic information; never convert it to zero or use it as a reason to issue a fresh-key write.
+
+## 15. Submit feedback only with explicit confirmation
+
+Call `adrate feedback` only when the user explicitly asks to submit feedback, or after you show the exact category and message and receive confirmation. Never call it automatically after CLI errors, in the background, or as silent telemetry.
+
+Before submission, remove Tokens, Authorization/Cookie values, passwords, API keys, device codes, TikTok access tokens, personal information, full ad payloads, environment variables, logs, stack traces, and unnecessary business data. A stable error code or exit code is acceptable only as plain text; never copy an unsanitized response. The service's known-pattern redaction is only a fallback and cannot prove that a message is safe. The idempotency key must not contain a secret either.
+
+The CLI attaches only its version, platform-architecture, and Node version. It does not attach hostname, cwd, paths, shell history, environment variables, or command history. Prefer stdin so the feedback remains literal process input and does not remain in shell history or process argv:
+
+```sh
+adrate feedback --category bug --message-stdin --json
+```
+
+Send the message through the executor's stdin. If using a process API, pass `--message=<text>` as one argv token; text beginning with `--` must remain after the equals sign. Never concatenate free text into a shell command string. If the executor cannot provide stdin or an argv array and correct shell escaping cannot be proven, stop without submitting.
+
+The CLI sends at most one request and does not create feedback pending state. If a failure prints a feedback retry key, preserve it. A bounded retry must use the same category, the exact same message, and that same key:
+
+```sh
+adrate feedback --category bug --message-stdin --idempotency-key feedback_123 --json
+```
+
+Do not change the key to force a duplicate submission. `RATE_LIMITED` must honor Retry-After. `INVALID_REQUEST`, missing scope, and entitlement denial require correction or reauthorization, not a retry loop.
 
 ## M0 boundary
 

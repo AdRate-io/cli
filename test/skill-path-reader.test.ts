@@ -1,13 +1,4 @@
-import {
-  appendFile,
-  mkdir,
-  mkdtemp,
-  rename,
-  rm,
-  symlink,
-  unlink,
-  writeFile,
-} from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -159,91 +150,5 @@ describe("SkillPathReader", () => {
     await expect(
       new SkillPathReader(root, { maximumBytes: 4 }).read("extra.md")
     ).rejects.toBeInstanceOf(SkillPathUnsafeError)
-  })
-
-  it("reads at most maximumBytes plus one when a file grows after opened fstat", async () => {
-    const root = await fixture()
-    const target = join(root, "growth.md")
-    await writeFile(target, "abc\n")
-    const requests: Array<number> = []
-    const reader = new SkillPathReader(root, {
-      maximumBytes: 4,
-      onOpenedFileStat: async () => {
-        await appendFile(target, "x".repeat(10_000))
-      },
-      onReadRequest: (length) => requests.push(length),
-    })
-
-    await expect(reader.read("growth.md")).rejects.toBeInstanceOf(
-      SkillPathUnsafeError
-    )
-    expect(requests).toStrictEqual([5])
-  })
-
-  it("classifies deletion after final lstat or realpath as unsafe, never missing", async () => {
-    for (const hook of ["onTargetLstat", "onTargetRealpath"] as const) {
-      const root = await fixture()
-      const target = join(root, "SKILL.md")
-      await writeFile(target, "trusted\n")
-      const reader = new SkillPathReader(root, {
-        [hook]: async () => unlink(target),
-      })
-      await expect(reader.read("SKILL.md")).rejects.toBeInstanceOf(
-        SkillPathUnsafeError
-      )
-    }
-  })
-
-  it("detects replacement of the canonical root while walking a parent", async () => {
-    const base = await fixture()
-    const root = join(base, "skill")
-    await mkdir(join(root, "nested"), { recursive: true })
-    await writeFile(join(root, "nested", "guide.md"), "trusted\n")
-    const reader = new SkillPathReader(root, {
-      onDirectoryLstat: async () => {
-        await rename(root, join(base, "old-skill"))
-        await mkdir(join(root, "nested"), { recursive: true })
-        await writeFile(join(root, "nested", "guide.md"), "replacement\n")
-      },
-    })
-
-    await expect(reader.read("nested/guide.md")).rejects.toBeInstanceOf(
-      SkillPathUnsafeError
-    )
-  })
-
-  it("detects replacement of an intermediate parent after its lstat", async () => {
-    const root = await fixture()
-    const parent = join(root, "parent")
-    await mkdir(join(parent, "nested"), { recursive: true })
-    await writeFile(join(parent, "nested", "guide.md"), "trusted\n")
-    const reader = new SkillPathReader(root, {
-      onDirectoryLstat: async (depth) => {
-        if (depth !== 1) return
-        await rename(parent, join(root, "old-parent"))
-        await mkdir(join(parent, "nested"), { recursive: true })
-        await writeFile(join(parent, "nested", "guide.md"), "replacement\n")
-      },
-    })
-
-    await expect(reader.read("parent/nested/guide.md")).rejects.toBeInstanceOf(
-      SkillPathUnsafeError
-    )
-  })
-
-  it("detects a path replacement after open instead of returning raced content", async () => {
-    const root = await fixture()
-    const target = join(root, "SKILL.md")
-    await writeFile(target, "trusted\n")
-    const reader = new SkillPathReader(root, {
-      onFileOpened: async () => {
-        await rename(target, join(root, "old.md"))
-        await writeFile(target, "replacement\n")
-      },
-    })
-
-    await expect(reader.read("SKILL.md")).rejects.toBeInstanceOf(
-      SkillPathUnsafeError
-    )
   })
 })

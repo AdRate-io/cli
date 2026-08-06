@@ -2,52 +2,6 @@ import { createHash } from "node:crypto"
 
 export const SKILL_NAMES = Object.freeze(["adrate-shared", "adrate-ads"])
 
-export const EXPECTED_SKILL_MANIFESTS = Object.freeze({
-  "adrate-shared": Object.freeze({
-    formatVersion: 1,
-    name: "adrate-shared",
-    description:
-      "Operate AdRate CLI authentication, recovery, pagination, rate limits, and ownership boundaries safely. Use whenever an Agent invokes AdRate or interprets its envelopes and Command results.",
-    version: "1.0.0",
-    minCliVersion: "0.1.0",
-    requiredBin: "adrate",
-    cliHelp: "adrate skills read adrate-shared",
-    shellSha256:
-      "357a0b4e56169e234ae02ebaa436e30ca953fdb30f93503e39901ff91a71dbe8",
-    contentSha256:
-      "b8a4ee39d8b0611c1178ad8b931d8d11787844cafafe3dfde5b1ab2876f39793",
-  }),
-  "adrate-ads": Object.freeze({
-    formatVersion: 1,
-    name: "adrate-ads",
-    description:
-      "Inspect AdRate Campaigns and reports, select TikTok authorizations, and apply single-Campaign status changes safely. Use for every M0 advertising read or write operation.",
-    version: "1.0.0",
-    minCliVersion: "0.1.0",
-    requiredBin: "adrate",
-    cliHelp: "adrate skills read adrate-ads",
-    shellSha256:
-      "2ad811bd131617f078d6c6fedc20f98efa1e72758c26aade947d8665a2ed4419",
-    contentSha256:
-      "f7e4245e3db68a6b7ba91394ef4a570111bb4be453e1a21c210c0ef181997f7f",
-  }),
-})
-
-export const EXPECTED_OPENAI_CONFIGS = Object.freeze({
-  "adrate-shared": Object.freeze({
-    displayName: "AdRate Shared Safety",
-    shortDescription: "Safe authentication, recovery, and CLI operation",
-    defaultPrompt:
-      "Use $adrate-shared to operate AdRate CLI safely and recover ambiguous results.",
-  }),
-  "adrate-ads": Object.freeze({
-    displayName: "AdRate Ads Operations",
-    shortDescription: "Inspect Campaigns and apply safe status changes",
-    defaultPrompt:
-      "Use $adrate-ads to inspect AdRate Campaigns and make a safe ENABLE or DISABLE change.",
-  }),
-})
-
 const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/

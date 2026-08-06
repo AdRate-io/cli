@@ -2,7 +2,7 @@
 
 核验日期：2026-08-01。范围决策更新：2026-08-02。
 
-**范围决策（2026-08-02）**：**@adrate/cli 第一版不支持 Accio connector。** 我们在检索范围内没有找到可据以实现和验证 custom Connector 的正式合同，按"不猜接口"的原则没有做适配，留到后续版本。两项 accio 闸门（`accio-official-connector`、`accio-capacity`）保留在九项名册和 pin 文件中并维持 `blocked`，但已从 prerelease 与 stable 两个 channel 的 required 列表中摘除，不再阻断 CLI 首发。本文件的核验结论与解锁条件全部不变——摘除的是"是否阻断发布"，不是"是否已适配"。
+**范围决策（2026-08-02，2026-08-05 更新发布边界）**：**@adrate/cli 第一版不支持 Accio connector。** 我们在检索范围内没有找到可据以实现和验证 custom Connector 的正式合同，按"不猜接口"的原则没有做适配，留到后续版本。CLI-CLEANUP 已删除旧 external gate/evidence/pin/readiness 机制，Accio 不进入现行 npm 发布流程；本文件只记录"尚未适配"的事实和重新评估条件。
 
 结论：正式适配保持 `BLOCKED`。**这是对我们检索结果的记录，不是对 Accio 官方资料完备性的判断。** 截至核验日，我们在下列公开入口中未能找到 custom Connector manifest 的 Schema、目录/文件名、device-code 字段、官方 validator 命令或 import smoke 命令。因此本仓库没有生成 connector manifest，也没有把冻结设计稿中的历史 API Key 形状改写成看似有效的 device-code manifest。
 
@@ -23,19 +23,19 @@
 - OAuth 模式为 Device Authorization，不回退 API Key-first。
 - production 发码与 token URL 分别为 `https://api.adrate.io/oauth/device/code`、`https://api.adrate.io/oauth/token`；test issuer 必须隔离。
 - `client_id=adrate-cli`。
-- scope 精确为 `identity.read connections.read ads.campaign.read ads.report.read ads.campaign.status.write`。
+- scope 精确为 `identity.read connections.read ads.campaign.read ads.report.read ads.campaign.status.write feedback.write`。
 - 单活动 Session，预期 `multiAccount=false`。
 - 可执行程序为 `adrate`，logout 命令为 `adrate auth logout`。
 - 连接态只观察用户目录下 `.adrate/credentials.json`；该文件不含 Token，Token 仍进 Keychain 或安全 fallback。
 
 ## 解锁条件
 
-只有以下资料我们都拿到了，才能创建 manifest、把 `validation.json` 改为 official_pass，并把两项 accio 闸门转回 required：
+只有以下资料我们都拿到了，才能创建 manifest、更新兼容性结论并重新评估是否纳入产品范围：
 
 1. Accio custom Connector 的 manifest Schema、规定目录/文件名和 device-code 字段合同。
 2. 官方 validator 的名称、版本、安装来源和可复现命令。
 3. 官方 import smoke 的可复现命令与脱敏 PASS 输出。
-4. Accio 真实沙箱中 device-code、五项 scope、无 API Key/client secret、连接态、logout 双清、0600 fallback 的实测。
+4. Accio 真实沙箱中 device-code、六项 M0 scope、无 API Key/client secret、连接态、logout 双清、0600 fallback 的实测。
 5. Boss 确认真实账户规模/轮询节奏可被 3000 单位/日覆盖。
 
-在解锁前不得创建任何猜测性 manifest；本地 CLI build/test 不因外部资料缺失而失败。自 2026-08-02 起 `pnpm release:external-gate` 不再因本项失败——它仍会因其余未取证的 required gate 失败，这是设计。
+在解锁前不得创建任何猜测性 manifest；本地 CLI build/test 和 npm 发布不因外部资料缺失而失败。

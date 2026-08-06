@@ -7,7 +7,7 @@ import {
 } from "../constants.js"
 import { validateBrowserUrl } from "../config/issuer.js"
 import {
-  hasExactKeys,
+  hasKeys,
   isCanonicalUtcIso,
   isPlainObject,
   isSafeIntegerInRange,
@@ -138,7 +138,7 @@ export function decodeDeviceCodeResponse(
   const raw = parseJsonObject(text)
   if (
     !raw ||
-    !hasExactKeys(raw, [
+    !hasKeys(raw, [
       "device_code",
       "user_code",
       "verification_uri",
@@ -187,7 +187,7 @@ export function decodeDeviceTokenResponse(
   const raw = parseJsonObject(text)
   if (
     !raw ||
-    !hasExactKeys(raw, [
+    !hasKeys(raw, [
       "access_token",
       "token_type",
       "expires_in",

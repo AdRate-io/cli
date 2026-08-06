@@ -115,14 +115,11 @@ export function resolveRemediationEnvironment(
   if (
     device &&
     poll &&
-    (poll.environment !== device.environment ||
-      poll.issuerOrigin !== device.issuerOrigin ||
-      poll.clientInstanceId !== device.clientInstanceId ||
-      poll.deviceGeneration !== device.generation)
+    poll.deviceGeneration !== device.generation
   ) {
     return null
   }
-  const flow = device ?? issue ?? poll
+  const flow = device ?? issue
   if (flow) return flow.environment
 
   // 无 index 时的 fallback 无法证明 issuer，任何低优先级 metadata/config

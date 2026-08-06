@@ -15,11 +15,6 @@ import {
 } from "../errors.js"
 import { hasExactCommandNotFoundProof } from "./command-query-service.js"
 import {
-  PendingCommandAttemptBusyError,
-  PendingCommandAttemptUnsafeError,
-  PendingCommandClockRollbackError,
-} from "./pending-command-attempt.js"
-import {
   PENDING_COMMAND_RECORD_ID_PATTERN,
   parsePendingCommandRecord,
   pendingCredentialScopeMatches,
@@ -42,7 +37,6 @@ import type {
   PendingCommandScanResult,
 } from "./pending-command-repository.js"
 import type { StatusCommandDispatcher } from "./status-command-dispatcher.js"
-import type { PendingCommandAttemptHandle } from "./pending-command-attempt.js"
 
 const RESUME_POST_WINDOW_MS = 86_400_000
 
@@ -300,34 +294,16 @@ export class CommandResumeService {
   }
 
   async qualify(input: CommandResumeInput): Promise<QualifiedCommandResume> {
-    // 输入闸门必须先于 scan、credential 与后续网络。
     const validated = validateCommandResumeInput(input)
     const located = await this.locateValidated(validated)
     return this.qualifyLocated(located, validated)
   }
 
   /**
-   * 完成一次显式 Resume。共享同一本地状态目录的并发由 durable owner
-   * 与同 Key短锁 exact CAS 单飞；Keychain、GET 与可选 POST 均在文件锁外。
-   * 只有跨机器并发依赖 T08 服务端幂等合同。
+   * 完成一次显式 Resume。GET 先行；精确 404 且未满 24h 时使用原 Key POST。
    */
   async resume(input: CommandResumeInput): Promise<CliOutcome<CliEnvelope>> {
     const validated = validateCommandResumeInput(input)
-    try {
-      if (
-        await this.pending.attempts.completeTerminalCleanup(
-          validated.idempotencyKey
-        )
-      ) {
-        throw usageFailure(
-          "The completed pending Command cleanup was recovered locally; query the original idempotency key with commands get.",
-          { reason: "pending_command_terminal_cleanup_completed" }
-        )
-      }
-    } catch (error) {
-      if (error instanceof CliFailure) throw error
-      throw this.mapAttemptFailure(error)
-    }
     if (this.query === null || this.dispatcher === null) {
       throw dependencyFailure(
         "Command resume execution dependencies are unavailable.",
@@ -336,51 +312,13 @@ export class CommandResumeService {
       )
     }
     const located = await this.locateValidated(validated)
-    let attempt: PendingCommandAttemptHandle
-    try {
-      attempt = await this.pending.attempts.reserve({
-        expected: located.entry.record,
-        phase: "query_intent",
-        observedAt: located.observedAt,
-        allowReclaim: true,
-      })
-    } catch (error) {
-      throw this.mapAttemptFailure(error)
-    }
-    const ownership = { transferred: false }
-    let outcome: CliOutcome<CliEnvelope> | undefined
-    let failure: unknown
-    let failed = false
-    try {
-      const initial = await this.qualifyLocated(
-        located,
-        validated,
-        attempt.attempt.ownerToken
-      )
-      outcome = await this.resumeValidated(
-        validated,
-        initial,
-        attempt,
-        ownership,
-        this.query,
-        this.dispatcher
-      )
-    } catch (error) {
-      failure = error
-      failed = true
-    }
-    if (!ownership.transferred) {
-      try {
-        await this.pending.attempts.release(attempt)
-      } catch (cleanupError) {
-        if (!failed) {
-          failure = this.mapAttemptFailure(cleanupError)
-          failed = true
-        }
-      }
-    }
-    if (failed) throw failure
-    return outcome!
+    const initial = await this.qualifyLocated(located, validated)
+    return this.resumeValidated(
+      validated,
+      initial,
+      this.query,
+      this.dispatcher
+    )
   }
 
   private locateValidated(
@@ -410,7 +348,6 @@ export class CommandResumeService {
       )
     }
 
-    // 永久阻断态不依赖时钟或当前 credential。
     if (entry.record.localState === "expired_unsubmitted") {
       throw terminalFailure(entry, "expired_unsubmitted")
     }
@@ -426,8 +363,7 @@ export class CommandResumeService {
 
   private async qualifyLocated(
     locatedResume: LocatedCommandResume,
-    validated: ValidatedCommandResumeInput,
-    attemptOwnerToken?: string
+    validated: ValidatedCommandResumeInput
   ): Promise<QualifiedCommandResume> {
     const { entry, observedAt } = locatedResume
     const located = await this.local.requireLocated()
@@ -437,7 +373,7 @@ export class CommandResumeService {
       )
     }
     if (!scopeMatches(entry, located)) {
-      await this.markOrphaned(entry, observedAt, attemptOwnerToken)
+      await this.markOrphaned(entry, observedAt)
       throw terminalFailure(entry, "orphaned_credential")
     }
 
@@ -454,22 +390,17 @@ export class CommandResumeService {
   private async resumeValidated(
     validated: ValidatedCommandResumeInput,
     initial: QualifiedCommandResume,
-    attempt: PendingCommandAttemptHandle,
-    ownership: { transferred: boolean },
     query: Pick<CommandQueryService, "get">,
     dispatcher: Pick<StatusCommandDispatcher, "dispatch">
   ): Promise<CliOutcome<CliEnvelope>> {
-    const queryOutcome = await query.get(
-      {
-        ...(initial.entry.record.commandId === null
-          ? { idempotencyKey: initial.entry.record.idempotencyKey }
-          : { commandId: initial.entry.record.commandId }),
-        ...(validated.requestId === undefined
-          ? {}
-          : { requestId: validated.requestId }),
-      },
-      { attempt }
-    )
+    const queryOutcome = await query.get({
+      ...(initial.entry.record.commandId === null
+        ? { idempotencyKey: initial.entry.record.idempotencyKey }
+        : { commandId: initial.entry.record.commandId }),
+      ...(validated.requestId === undefined
+        ? {}
+        : { requestId: validated.requestId }),
+    })
 
     if (!queryOutcome.envelope.ok) {
       if (!hasExactCommandNotFoundProof(queryOutcome)) {
@@ -478,15 +409,11 @@ export class CommandResumeService {
       return this.resumeAfterNotFound(
         validated,
         initial,
-        attempt,
-        ownership,
         queryOutcome,
         dispatcher
       )
     }
 
-    // QueryService 已经完成唯一的 GET 合同判定；这里只读取已验证 DTO
-    // 的状态事实，不再复制 HTTP/信封决策矩阵。
     const data = decodePublicCommandData(queryOutcome.envelope.data)
     if (data === null) {
       throw dependencyFailure(
@@ -499,11 +426,7 @@ export class CommandResumeService {
       return queryOutcome
     }
 
-    const refreshed = await this.refreshCompatible(
-      initial,
-      validated,
-      attempt.attempt.ownerToken
-    )
+    const refreshed = await this.refreshCompatible(initial, validated)
     if (refreshed === null) return queryOutcome
     if (
       refreshed.entry.record.localState !== "command_known" ||
@@ -528,12 +451,9 @@ export class CommandResumeService {
         { recordId: initial.entry.recordId, reason: "query_convergence_drift" }
       )
     }
-    ownership.transferred = true
     return dispatcher.dispatch({
       record: boundary.record,
       expectedCredential: refreshed.located,
-      attempt,
-      observedAt: refreshed.observedAt,
       ...(validated.requestId === undefined
         ? {}
         : { requestId: validated.requestId }),
@@ -543,16 +463,10 @@ export class CommandResumeService {
   private async resumeAfterNotFound(
     validated: ValidatedCommandResumeInput,
     initial: QualifiedCommandResume,
-    attempt: PendingCommandAttemptHandle,
-    ownership: { transferred: boolean },
     notFoundOutcome: CliOutcome<CliEnvelope>,
     dispatcher: Pick<StatusCommandDispatcher, "dispatch">
   ): Promise<CliOutcome<CliEnvelope>> {
-    const refreshed = await this.refreshCompatible(
-      initial,
-      validated,
-      attempt.attempt.ownerToken
-    )
+    const refreshed = await this.refreshCompatible(initial, validated)
     if (refreshed === null) return notFoundOutcome
     const boundary = await this.rereadCompatible(
       refreshed.entry,
@@ -560,23 +474,14 @@ export class CommandResumeService {
     )
     if (boundary === null) return notFoundOutcome
     try {
-      ownership.transferred = true
       return await dispatcher.dispatch({
         record: boundary.record,
         expectedCredential: refreshed.located,
-        attempt,
-        observedAt: refreshed.observedAt,
         ...(validated.requestId === undefined
           ? {}
           : { requestId: validated.requestId }),
-        beforePost: (advancedAttempt) => {
-          const lowerBound = new Date(
-            Math.max(
-              refreshed.observedAt.getTime(),
-              Date.parse(advancedAttempt.attempt.observedAt)
-            )
-          )
-          const dispatchNow = qualificationNow(this.now, lowerBound)
+        beforePost: () => {
+          const dispatchNow = qualificationNow(this.now, refreshed.observedAt)
           const expiresAt =
             Date.parse(boundary.record.createdAt) + RESUME_POST_WINDOW_MS
           if (dispatchNow.getTime() >= expiresAt) {
@@ -586,8 +491,6 @@ export class CommandResumeService {
       })
     } catch (error) {
       if (!(error instanceof ResumePostWindowExpiredError)) throw error
-      // typed expiry 发生在 POST 调用之前；fence 返回后再用短锁 exact
-      // CAS 标记。若兄弟请求已推进更强证据，则保留并返回原 GET 事实。
       if (await this.markExpired(boundary, error.observedAt)) {
         throw terminalFailure(boundary, "expired_unsubmitted")
       }
@@ -597,8 +500,7 @@ export class CommandResumeService {
 
   private async refreshCompatible(
     initial: QualifiedCommandResume,
-    validated: ValidatedCommandResumeInput,
-    attemptOwnerToken: string
+    validated: ValidatedCommandResumeInput
   ): Promise<QualifiedCommandResume | null> {
     const located = await this.locateValidated(
       validated,
@@ -606,11 +508,7 @@ export class CommandResumeService {
       initial.observedAt
     )
     if (located === null) return null
-    const refreshed = await this.qualifyLocated(
-      located,
-      validated,
-      attemptOwnerToken
-    )
+    const refreshed = await this.qualifyLocated(located, validated)
     this.assertCompatibleProgression(initial.entry, refreshed.entry)
     return refreshed
   }
@@ -705,8 +603,7 @@ export class CommandResumeService {
 
   private async markOrphaned(
     entry: PendingCommandRecordEntry,
-    now: Date,
-    attemptOwnerToken?: string
+    now: Date
   ): Promise<void> {
     const next: PendingCommandRecord = {
       ...entry.record,
@@ -714,9 +611,7 @@ export class CommandResumeService {
       updatedAt: monotonicTimestamp(entry.record, now),
     }
     try {
-      await this.pending.replaceExact(entry.record, next, {
-        attemptOwnerToken,
-      })
+      await this.pending.replaceExact(entry.record, next)
     } catch {
       const current = await this.pending.read(entry.record.idempotencyKey)
       if (
@@ -732,25 +627,5 @@ export class CommandResumeService {
         { recordId: entry.recordId }
       )
     }
-  }
-
-  private mapAttemptFailure(error: unknown): unknown {
-    if (error instanceof PendingCommandAttemptBusyError) {
-      return dependencyFailure(
-        "Another Command recovery attempt is in progress; no request was sent.",
-        EXIT_CODE.retryable,
-        { reason: "command_attempt_in_progress" }
-      )
-    }
-    if (error instanceof PendingCommandAttemptUnsafeError) {
-      return unsafeResumeFailure([error.invalidEntry])
-    }
-    if (error instanceof PendingCommandClockRollbackError) {
-      return localStateFailure(
-        "The local clock moved backwards; no request was sent.",
-        { reason: "clock_rollback" }
-      )
-    }
-    return error
   }
 }

@@ -2,7 +2,6 @@ import { constants } from "node:fs"
 import { lstat, open, realpath } from "node:fs/promises"
 import { isAbsolute, resolve, sep, win32 } from "node:path"
 import { normalizeSkillText, sha256SkillText } from "./skill-contract.js"
-import type { BigIntStats } from "node:fs"
 import type { FileHandle } from "node:fs/promises"
 
 const DEFAULT_MAXIMUM_BYTES = 1024 * 1024
@@ -28,20 +27,8 @@ export interface ReadSkillFile {
   size: number
 }
 
-interface VerifiedDirectory {
-  path: string
-  realpath: string
-  identity: BigIntStats
-}
-
 interface ReaderOptions {
   maximumBytes?: number
-  /** 以下回调仅用于可控故障注入；生产组合根不设置。 */
-  onDirectoryLstat?: (depth: number) => Promise<void>
-  onTargetLstat?: () => Promise<void>
-  onTargetRealpath?: () => Promise<void>
-  onFileOpened?: () => Promise<void>
-  onOpenedFileStat?: () => Promise<void>
   onReadRequest?: (length: number) => void
 }
 
@@ -65,48 +52,33 @@ function safeRelativePath(value: string): boolean {
   ) {
     return false
   }
-  const segments = value.split("/")
-  return segments.every(
-    (segment) => segment.length > 0 && segment !== "." && segment !== ".."
-  )
+  return value
+    .split("/")
+    .every(
+      (segment) => segment.length > 0 && segment !== "." && segment !== ".."
+    )
 }
 
 function contained(root: string, candidate: string): boolean {
-  return candidate.startsWith(`${root}${sep}`)
+  return candidate === root || candidate.startsWith(`${root}${sep}`)
 }
 
-function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.mode === right.mode
-  )
-}
-
-async function unsafeRealpath(value: string): Promise<string> {
+async function canonicalDirectory(path: string): Promise<string> {
+  let resolved: string
   try {
-    return await realpath(value)
-  } catch {
+    resolved = await realpath(path)
+    const info = await lstat(resolved)
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new SkillPathUnsafeError()
+    }
+  } catch (error) {
+    if (error instanceof SkillPathUnsafeError) throw error
+    if (missingFile(error)) throw new SkillPathMissingError()
     throw new SkillPathUnsafeError()
   }
+  return resolved
 }
 
-async function unsafeLstat(value: string): Promise<BigIntStats> {
-  try {
-    return await lstat(value, { bigint: true })
-  } catch {
-    throw new SkillPathUnsafeError()
-  }
-}
-
-/**
- * 只读取调用方已经选定的 Skill 根。根本身允许是安装器创建的 symlink，
- * 但解析后会固定 canonical root；其下所有相对组件均逐级禁止 symlink，
- * 并在 missing、open、read 前后复核父目录与文件 identity。
- */
 export class SkillPathReader {
   private readonly maximumBytes: number
 
@@ -127,114 +99,50 @@ export class SkillPathReader {
     this.maximumBytes = maximumBytes
   }
 
-  private async resolveRoot(): Promise<VerifiedDirectory> {
-    const rootRealpath = await unsafeRealpath(this.root)
-    const identity = await unsafeLstat(rootRealpath)
-    if (identity.isSymbolicLink() || !identity.isDirectory()) {
-      throw new SkillPathUnsafeError()
-    }
-    if ((await unsafeRealpath(rootRealpath)) !== rootRealpath) {
-      throw new SkillPathUnsafeError()
-    }
-    return { path: rootRealpath, realpath: rootRealpath, identity }
-  }
-
-  private async verifyDirectories(
-    rootRealpath: string,
-    directories: ReadonlyArray<VerifiedDirectory>
-  ): Promise<void> {
-    if ((await unsafeRealpath(this.root)) !== rootRealpath) {
-      throw new SkillPathUnsafeError()
-    }
-    for (const [index, directory] of directories.entries()) {
-      const identity = await unsafeLstat(directory.path)
-      if (
-        identity.isSymbolicLink() ||
-        !identity.isDirectory() ||
-        !sameIdentity(directory.identity, identity)
-      ) {
-        throw new SkillPathUnsafeError()
-      }
-      const resolved = await unsafeRealpath(directory.path)
-      if (
-        resolved !== directory.realpath ||
-        (index > 0 && !contained(rootRealpath, resolved))
-      ) {
-        throw new SkillPathUnsafeError()
-      }
-    }
-  }
-
-  private async throwConfirmedMissing(
-    candidate: string,
-    rootRealpath: string,
-    directories: ReadonlyArray<VerifiedDirectory>
-  ): Promise<never> {
-    await this.verifyDirectories(rootRealpath, directories)
-    try {
-      await lstat(candidate, { bigint: true })
-      throw new SkillPathUnsafeError()
-    } catch (error) {
-      if (error instanceof SkillPathUnsafeError) throw error
-      if (!missingFile(error)) throw new SkillPathUnsafeError()
-    }
-    await this.verifyDirectories(rootRealpath, directories)
-    throw new SkillPathMissingError()
-  }
-
-  private async resolveParents(
-    root: VerifiedDirectory,
-    segments: ReadonlyArray<string>
-  ): Promise<{
-    directories: Array<VerifiedDirectory>
-    candidate: string
-  }> {
-    const directories = [root]
-    let parent = root.realpath
-    for (const [index, segment] of segments.slice(0, -1).entries()) {
-      const candidate = resolve(parent, segment)
-      let identity: BigIntStats
+  private async candidate(relativePath: string): Promise<string> {
+    const root = await canonicalDirectory(this.root)
+    const segments = relativePath.split("/")
+    let parent = root
+    for (const segment of segments.slice(0, -1)) {
+      const path = resolve(parent, segment)
+      let info
       try {
-        identity = await lstat(candidate, { bigint: true })
+        info = await lstat(path)
       } catch (error) {
-        if (missingFile(error)) {
-          return this.throwConfirmedMissing(
-            candidate,
-            root.realpath,
-            directories
-          )
-        }
+        if (missingFile(error)) throw new SkillPathMissingError()
         throw new SkillPathUnsafeError()
       }
-      await this.options.onDirectoryLstat?.(index + 1)
-      if (identity.isSymbolicLink() || !identity.isDirectory()) {
+      if (info.isSymbolicLink() || !info.isDirectory()) {
         throw new SkillPathUnsafeError()
       }
-      const resolved = await unsafeRealpath(candidate)
-      if (!contained(root.realpath, resolved)) {
-        throw new SkillPathUnsafeError()
-      }
-      await this.verifyDirectories(root.realpath, directories)
-      const confirmed = await unsafeLstat(resolved)
-      if (
-        confirmed.isSymbolicLink() ||
-        !confirmed.isDirectory() ||
-        !sameIdentity(identity, confirmed)
-      ) {
-        throw new SkillPathUnsafeError()
-      }
-      directories.push({
-        path: resolved,
-        realpath: resolved,
-        identity: confirmed,
-      })
-      await this.verifyDirectories(root.realpath, directories)
-      parent = resolved
+      parent = await canonicalDirectory(path)
+      if (!contained(root, parent)) throw new SkillPathUnsafeError()
     }
-    return {
-      directories,
-      candidate: resolve(parent, segments.at(-1)!),
+
+    const candidate = resolve(parent, segments.at(-1)!)
+    if (!contained(root, candidate)) throw new SkillPathUnsafeError()
+    let info
+    try {
+      info = await lstat(candidate)
+    } catch (error) {
+      if (missingFile(error)) throw new SkillPathMissingError()
+      throw new SkillPathUnsafeError()
     }
+    if (
+      info.isSymbolicLink() ||
+      !info.isFile() ||
+      info.size > this.maximumBytes
+    ) {
+      throw new SkillPathUnsafeError()
+    }
+    let resolvedCandidate: string
+    try {
+      resolvedCandidate = await realpath(candidate)
+    } catch {
+      throw new SkillPathUnsafeError()
+    }
+    if (!contained(root, resolvedCandidate)) throw new SkillPathUnsafeError()
+    return resolvedCandidate
   }
 
   private async readBounded(handle: FileHandle): Promise<Buffer> {
@@ -243,15 +151,9 @@ export class SkillPathReader {
     while (total < buffer.byteLength) {
       const length = buffer.byteLength - total
       this.options.onReadRequest?.(length)
-      let bytesRead: number
-      try {
-        const result = await handle.read(buffer, total, length, total)
-        bytesRead = result.bytesRead
-      } catch {
-        throw new SkillPathUnsafeError()
-      }
-      if (bytesRead === 0) break
-      total += bytesRead
+      const result = await handle.read(buffer, total, length, total)
+      if (result.bytesRead === 0) break
+      total += result.bytesRead
       if (total > this.maximumBytes) throw new SkillPathUnsafeError()
     }
     return buffer.subarray(0, total)
@@ -259,42 +161,7 @@ export class SkillPathReader {
 
   async read(relativePath: string): Promise<ReadSkillFile> {
     if (!safeRelativePath(relativePath)) throw new SkillPathUnsafeError()
-    const root = await this.resolveRoot()
-    const segments = relativePath.split("/")
-    const { directories, candidate } = await this.resolveParents(root, segments)
-    if (!contained(root.realpath, candidate)) throw new SkillPathUnsafeError()
-
-    let before: BigIntStats
-    try {
-      before = await lstat(candidate, { bigint: true })
-    } catch (error) {
-      if (missingFile(error)) {
-        return this.throwConfirmedMissing(candidate, root.realpath, directories)
-      }
-      throw new SkillPathUnsafeError()
-    }
-    if (
-      before.isSymbolicLink() ||
-      !before.isFile() ||
-      before.size > BigInt(this.maximumBytes)
-    ) {
-      throw new SkillPathUnsafeError()
-    }
-    await this.verifyDirectories(root.realpath, directories)
-    if (!sameIdentity(before, await unsafeLstat(candidate))) {
-      throw new SkillPathUnsafeError()
-    }
-    await this.options.onTargetLstat?.()
-    const candidateRealpath = await unsafeRealpath(candidate)
-    if (!contained(root.realpath, candidateRealpath)) {
-      throw new SkillPathUnsafeError()
-    }
-    await this.verifyDirectories(root.realpath, directories)
-    if (!sameIdentity(before, await unsafeLstat(candidate))) {
-      throw new SkillPathUnsafeError()
-    }
-    await this.options.onTargetRealpath?.()
-
+    const candidate = await this.candidate(relativePath)
     const flags =
       process.platform === "win32"
         ? constants.O_RDONLY
@@ -303,33 +170,18 @@ export class SkillPathReader {
     try {
       handle = await open(candidate, flags)
     } catch {
-      // final 已经 lstat 存在；此后的任何 missing 都是竞态，不再降级。
       throw new SkillPathUnsafeError()
     }
 
     let buffer: Buffer | null = null
     let failure: unknown = null
     try {
-      await this.options.onFileOpened?.()
-      const opened = await handle.stat({ bigint: true })
-      if (
-        !opened.isFile() ||
-        opened.size > BigInt(this.maximumBytes) ||
-        !sameIdentity(before, opened)
-      ) {
+      const info = await handle.stat()
+      if (!info.isFile() || info.size > this.maximumBytes) {
         throw new SkillPathUnsafeError()
       }
-      await this.verifyDirectories(root.realpath, directories)
-      await this.options.onOpenedFileStat?.()
       buffer = await this.readBounded(handle)
-      const afterRead = await handle.stat({ bigint: true })
-      if (
-        !afterRead.isFile() ||
-        buffer.byteLength !== Number(opened.size) ||
-        !sameIdentity(opened, afterRead)
-      ) {
-        throw new SkillPathUnsafeError()
-      }
+      if (buffer.byteLength !== info.size) throw new SkillPathUnsafeError()
     } catch (error) {
       failure =
         error instanceof SkillPathUnsafeError
@@ -343,24 +195,6 @@ export class SkillPathReader {
     }
     if (failure) throw failure
     if (!buffer) throw new SkillPathUnsafeError()
-
-    await this.verifyDirectories(root.realpath, directories)
-    const after = await unsafeLstat(candidate)
-    if (
-      after.isSymbolicLink() ||
-      !after.isFile() ||
-      !sameIdentity(before, after)
-    ) {
-      throw new SkillPathUnsafeError()
-    }
-    const afterRealpath = await unsafeRealpath(candidate)
-    if (
-      afterRealpath !== candidateRealpath ||
-      !contained(root.realpath, afterRealpath)
-    ) {
-      throw new SkillPathUnsafeError()
-    }
-    await this.verifyDirectories(root.realpath, directories)
 
     let decoded: string
     try {

@@ -20,8 +20,7 @@ import type { JsonObject } from "../contracts/json.js"
 import type { Response as UndiciResponse } from "undici"
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-const JSON_CONTENT_TYPE_PATTERN =
-  /^application\/json(?:\s*;\s*charset\s*=\s*utf-8)?$/i
+const JSON_CONTENT_TYPE_PATTERN = /^application\/json(?:\s*;[^;]*)*$/i
 
 export interface HttpRequest {
   method: "GET" | "POST" | "DELETE"
@@ -243,7 +242,7 @@ export interface PublicReadRequestInput {
   idempotencyKey?: never
 }
 
-export interface PublicJsonPostInput {
+interface PublicJsonPostBase {
   method: "POST"
   issuerOrigin: string
   path: string
@@ -251,8 +250,19 @@ export interface PublicJsonPostInput {
   idempotencyKey: string
   json: JsonObject
   requestId?: string
+}
+
+export interface PublicStatusJsonPostInput extends PublicJsonPostBase {
   deadlineMs: 120_000
 }
+
+export interface PublicStandardJsonPostInput extends PublicJsonPostBase {
+  deadlineMs: 15_000
+}
+
+export type PublicJsonPostInput =
+  | PublicStatusJsonPostInput
+  | PublicStandardJsonPostInput
 
 export type PublicRequestInput = PublicReadRequestInput | PublicJsonPostInput
 
@@ -262,19 +272,23 @@ export interface PublicResponse {
   retryAfterSeconds: number | null
 }
 
-function assertPublicRequestContract(input: HttpRequest): void {
+function assertPublicRequestContract(input: PublicRequestInput): void {
+  // TypeScript 调用方受联合类型约束；运行时校验仍需覆盖 JavaScript 和未检查的外部调用。
+  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (
     input.method === "POST" &&
-    (input.deadlineMs !== DEADLINES_MS.statusWrite ||
-      input.json === undefined ||
+    (input.json === undefined ||
       input.idempotencyKey === undefined ||
-      !IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey))
+      !IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey) ||
+      (input.deadlineMs !== DEADLINES_MS.statusWrite &&
+        input.deadlineMs !== DEADLINES_MS.standard))
   ) {
     throw new HttpTransportError(
       "invalid_response",
       "The Public API write request is invalid."
     )
   }
+  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }
 
 export class PublicHttpClient {
@@ -297,7 +311,7 @@ export class PublicHttpClient {
    * 预算绑定为 120 秒，调用方不能用更短超时改变写结果语义。
    */
   async postPublicJson(
-    input: Omit<PublicJsonPostInput, "method" | "deadlineMs">
+    input: Omit<PublicStatusJsonPostInput, "method" | "deadlineMs">
   ): Promise<PublicResponse> {
     return this.requestAndDecodePublic({
       method: "POST",

@@ -1,19 +1,11 @@
 import { EXIT_CODE } from "../constants.js"
-import { createLocalError } from "../contracts/envelope.js"
 import {
-  CliFailure,
   dependencyFailure,
-  localRequestId,
   outcomeUnknownFailure,
 } from "../errors.js"
 import { outcomeFromEnvelope, warningsForEnvelope } from "../output.js"
 import { decideStatusPendingCommand } from "./command-response.js"
 import { settlePendingCommand } from "./pending-command-settlement.js"
-import {
-  PendingCommandAttemptBusyError,
-  PendingCommandAttemptUnsafeError,
-  PendingCommandClockRollbackError,
-} from "./pending-command-attempt.js"
 import type {
   LocalCredentialCoordinator,
   LocatedCredential,
@@ -26,17 +18,14 @@ import type {
   PendingCommandRecord,
 } from "./pending-command-contract.js"
 import type { PendingCommandRepository } from "./pending-command-repository.js"
-import type { PendingCommandAttemptHandle } from "./pending-command-attempt.js"
 import type { PendingCommandSettlementResult } from "./pending-command-settlement.js"
 
 export interface StatusCommandDispatchInput {
   record: PendingCommandRecord
   expectedCredential: LocatedCredential
   requestId?: string
-  attempt?: PendingCommandAttemptHandle
-  observedAt?: Date
   /** 凭证 fence 返回后、唯一 POST 紧前执行的同步检查。 */
-  beforePost?: (attempt: PendingCommandAttemptHandle) => void
+  beforePost?: () => void
 }
 
 function isOwnerCredentialKind(value: unknown): boolean {
@@ -80,58 +69,8 @@ function responseFact(response: PublicResponse): PendingCommandLastResponse {
   }
 }
 
-function chargeUnknownRecoveryWarning(response: PublicResponse): string | null {
-  return !response.envelope.ok &&
-    response.envelope.meta.usage?.operationUnitsCharged === null
-    ? "The write charge result is unknown; keep the original idempotency key and use commands resume. Do not issue a new Status request."
-    : null
-}
-
 const TERMINAL_MISSING_WARNING =
   "Local recovery evidence was already finalized. Query the original idempotency key with commands get; do not issue a new Status request."
-
-function attemptFailure(error: unknown): unknown {
-  if (error instanceof PendingCommandAttemptBusyError) {
-    return dependencyFailure(
-      "Another Command recovery attempt is in progress; no request was sent.",
-      EXIT_CODE.retryable,
-      { reason: "command_attempt_in_progress" }
-    )
-  }
-  if (error instanceof PendingCommandClockRollbackError) {
-    const message =
-      "The local clock moved backwards; no Status request was sent."
-    return new CliFailure(
-      message,
-      EXIT_CODE.business,
-      createLocalError(localRequestId(), "LOCAL_STATE_UNSAFE", message, false, {
-        reason: "clock_rollback",
-      })
-    )
-  }
-  if (error instanceof PendingCommandAttemptUnsafeError) {
-    const message =
-      "Pending Command attempt evidence is unsafe; no request was sent."
-    return new CliFailure(
-      message,
-      EXIT_CODE.business,
-      createLocalError(localRequestId(), "LOCAL_STATE_UNSAFE", message, false, {
-        invalidEntries: [
-          {
-            recordId: error.invalidEntry.recordId,
-            reason: error.invalidEntry.reason,
-          },
-        ],
-      })
-    )
-  }
-  return error
-}
-
-interface DispatchAttemptState {
-  attempt?: PendingCommandAttemptHandle
-  cleanupAllowed: boolean
-}
 
 /**
  * 对一条已安全落盘的 pending record 执行精确一次 Status POST，
@@ -157,71 +96,15 @@ export class StatusCommandDispatcher {
   async dispatch(
     input: StatusCommandDispatchInput
   ): Promise<CliOutcome<CliEnvelope>> {
-    const state: DispatchAttemptState = {
-      ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
-      cleanupAllowed: true,
-    }
-    let outcome: CliOutcome<CliEnvelope> | undefined
-    let failure: unknown
-    let failed = false
-    try {
-      outcome = await this.dispatchWithAttempt(input, state)
-    } catch (error) {
-      failure = error
-      failed = true
-    }
-    if (state.attempt !== undefined && state.cleanupAllowed) {
-      try {
-        await this.pending.attempts.release(state.attempt)
-      } catch (cleanupError) {
-        // 清理失败不得覆盖已经成立的远程/本地主事实。
-        // 无主错误时则 fail-loud，由后续显式 Resume 恢复。
-        if (!failed) {
-          failure = attemptFailure(cleanupError)
-          failed = true
-        }
-      }
-    }
-    if (failed) throw failure
-    return outcome!
-  }
-
-  private async dispatchWithAttempt(
-    input: StatusCommandDispatchInput,
-    state: DispatchAttemptState
-  ): Promise<CliOutcome<CliEnvelope>> {
     const record = input.record
-    let attempt: PendingCommandAttemptHandle
     assertCredentialMatchesRecord(record, input.expectedCredential)
-    try {
-      const observedAt = input.observedAt ?? this.now()
-      attempt =
-        state.attempt === undefined
-          ? await this.pending.attempts.reserve({
-              expected: record,
-              phase: "post_dispatch_intent",
-              observedAt,
-              allowReclaim: false,
-            })
-          : await this.pending.attempts.advanceToPost(
-              state.attempt,
-              record,
-              observedAt
-            )
-      state.attempt = attempt
-    } catch (error) {
-      throw attemptFailure(error)
-    }
 
     let response: PublicResponse
     const token = await this.local.fenceExpectedLocatedCredential(
       input.expectedCredential
     )
-    // fence 与远程调用之间不得加入 await：同步 hook 后立即创建 POST。
-    input.beforePost?.(attempt)
-    state.cleanupAllowed = false
+    input.beforePost?.()
     try {
-      // 不在 Dispatcher 内 retry：一次调用最多发出一次 POST。
       const pendingResponse = this.http.postPublicJson({
         issuerOrigin: record.issuerOrigin,
         path: `/public/v1/ads/advertisers/${record.intent.advId}/campaigns/${record.intent.campaignId}/status`,
@@ -239,16 +122,9 @@ export class StatusCommandDispatcher {
       })
       response = await pendingResponse
     } catch {
-      const settlement = await this.markResponseUnknownBestEffort(
-        record,
-        null,
-        attempt.attempt.ownerToken
-      )
-      state.cleanupAllowed = settlement !== null
+      await this.markResponseUnknownBestEffort(record, null)
       throw outcomeUnknownFailure(
-        settlement === "terminal_missing"
-          ? "The Status write result is unknown and local recovery evidence was already finalized. Query the original idempotency key with commands get; do not issue a new Status request."
-          : "The Status write result is unknown. Keep the original idempotency key and recover with commands resume.",
+        "The Status write result is unknown. Keep the original idempotency key and recover with commands resume.",
         { suggestedAction: "query_command" }
       )
     }
@@ -258,67 +134,44 @@ export class StatusCommandDispatcher {
       response.response.status,
       {
         idempotencyKey: record.idempotencyKey,
+        capabilityId: record.capabilityId,
         ...(record.commandId === null ? {} : { commandId: record.commandId }),
         intent: record.intent,
       }
     )
     let settlement: PendingCommandSettlementResult
     try {
-      const options = { attemptOwnerToken: attempt.attempt.ownerToken }
       if (decision.action === "remove") {
         settlement = await settlePendingCommand(
           this.pending,
           record,
           decision.command === null
             ? { kind: "not_created" }
-            : { kind: "final", commandId: decision.command.commandId },
-          options
+            : { kind: "final", commandId: decision.command.commandId }
         )
       } else if (decision.action === "retain_command") {
-        settlement = await settlePendingCommand(
-          this.pending,
-          record,
-          {
-            kind: "command_known",
-            commandId: decision.command.commandId,
-            updatedAt: monotonicTimestamp(record, this.now()),
-            lastResponse: responseFact(response),
-          },
-          options
-        )
+        settlement = await settlePendingCommand(this.pending, record, {
+          kind: "command_known",
+          commandId: decision.command.commandId,
+          updatedAt: monotonicTimestamp(record, this.now()),
+          lastResponse: responseFact(response),
+        })
       } else {
-        settlement = await settlePendingCommand(
-          this.pending,
-          record,
-          {
-            kind: "response_unknown",
-            updatedAt: monotonicTimestamp(record, this.now()),
-            lastResponse: responseFact(response),
-          },
-          options
-        )
+        settlement = await settlePendingCommand(this.pending, record, {
+          kind: "response_unknown",
+          updatedAt: monotonicTimestamp(record, this.now()),
+          lastResponse: responseFact(response),
+        })
       }
-      state.cleanupAllowed = true
     } catch {
-      const fallback = await this.markResponseUnknownBestEffort(
-        record,
-        responseFact(response),
-        attempt.attempt.ownerToken
-      )
-      state.cleanupAllowed = fallback !== null
+      await this.markResponseUnknownBestEffort(record, responseFact(response))
       throw outcomeUnknownFailure(
-        fallback === "terminal_missing"
-          ? "The Status response was received and local recovery evidence was already finalized. Query the original idempotency key with commands get; do not issue a new Status request."
-          : "The Status response was received, but local recovery evidence could not be committed.",
+        "The Status response was received, but local recovery evidence could not be committed.",
         { suggestedAction: "query_command" }
       )
     }
 
     if (decision.contractViolation === "invalid_command_response") {
-      const chargeWarning =
-        settlement === "terminal_missing"
-          ? TERMINAL_MISSING_WARNING
-          : chargeUnknownRecoveryWarning(response)
       const failure =
         decision.exitCode === EXIT_CODE.retryable
           ? dependencyFailure(
@@ -336,16 +189,14 @@ export class StatusCommandDispatcher {
         warnings: [
           ...failure.warnings,
           ...warningsForEnvelope(response.envelope, this.environment),
-          ...(chargeWarning === null ? [] : [chargeWarning]),
+          ...(settlement === "terminal_missing"
+            ? [TERMINAL_MISSING_WARNING]
+            : []),
         ],
       }
     }
 
     const outcome = outcomeFromEnvelope(response.envelope, this.environment)
-    const chargeWarning =
-      settlement === "terminal_missing"
-        ? TERMINAL_MISSING_WARNING
-        : chargeUnknownRecoveryWarning(response)
     return {
       ...outcome,
       exitCode: decision.exitCode,
@@ -357,29 +208,24 @@ export class StatusCommandDispatcher {
             ]
           : [
               ...outcome.warnings,
-              ...(chargeWarning === null ? [] : [chargeWarning]),
+              ...(settlement === "terminal_missing"
+                ? [TERMINAL_MISSING_WARNING]
+                : []),
             ],
     }
   }
 
   private async markResponseUnknownBestEffort(
     expected: PendingCommandRecord,
-    lastResponse: PendingCommandRecord["lastResponse"],
-    attemptOwnerToken: string
+    lastResponse: PendingCommandRecord["lastResponse"]
   ): Promise<PendingCommandSettlementResult | null> {
     try {
-      return await settlePendingCommand(
-        this.pending,
-        expected,
-        {
-          kind: "response_unknown",
-          updatedAt: monotonicTimestamp(expected, this.now()),
-          lastResponse,
-        },
-        { attemptOwnerToken }
-      )
+      return await settlePendingCommand(this.pending, expected, {
+        kind: "response_unknown",
+        updatedAt: monotonicTimestamp(expected, this.now()),
+        lastResponse,
+      })
     } catch {
-      // exact-record CAS 失败时绝不覆盖较新证据。
       return null
     }
   }

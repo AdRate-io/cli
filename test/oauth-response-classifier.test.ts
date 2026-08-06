@@ -6,10 +6,7 @@ const RECEIVED_AT = "2026-07-31T08:00:00.000Z"
 function classify(
   status: number,
   body: unknown,
-  options: {
-    retryAfter?: string
-    deliveryVerification?: boolean
-  } = {}
+  options: { retryAfter?: string } = {}
 ) {
   return classifyOAuthPollResponse({
     response: {
@@ -22,7 +19,6 @@ function classify(
     },
     receivedAt: RECEIVED_AT,
     protocolIntervalSeconds: 5,
-    deliveryVerification: options.deliveryVerification ?? false,
   })
 }
 
@@ -81,34 +77,6 @@ describe("OAuth poll response classifier", () => {
       nextPollDelaySeconds: 86_400,
       retryAfterSeconds: 86_400,
     })
-  })
-
-  it("uses delivery verification's single-use classification", () => {
-    expect(
-      classify(
-        400,
-        { error: "slow_down" },
-        { retryAfter: "20", deliveryVerification: true }
-      )
-    ).toEqual({
-      kind: "verification_unknown",
-      oauthError: "slow_down",
-      protocolIntervalSeconds: 20,
-      nextPollDelaySeconds: 20,
-      retryAfterSeconds: 20,
-    })
-    expect(
-      classify(400, { error: "slow_down" }, { deliveryVerification: true })
-    ).toEqual({
-      kind: "verification_unknown",
-      oauthError: "slow_down",
-      protocolIntervalSeconds: 10,
-      nextPollDelaySeconds: 10,
-      retryAfterSeconds: null,
-    })
-    expect(
-      classify(400, { error: "access_denied" }, { deliveryVerification: true })
-    ).toEqual({ kind: "terminal", oauthError: "access_denied" })
   })
 
   it("distinguishes non-JSON 5xx uncertainty from a rejected OAuth error", () => {

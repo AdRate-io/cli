@@ -86,24 +86,14 @@ function isBlocked(record: PendingCommandRecord): boolean {
 export async function settlePendingCommand(
   repository: PendingCommandRepository,
   expected: PendingCommandRecord,
-  settlement: PendingCommandSettlement,
-  options: { attemptOwnerToken?: string } = {}
+  settlement: PendingCommandSettlement
 ): Promise<PendingCommandSettlementResult> {
-  const removeTerminalExact = (record: PendingCommandRecord) =>
-    options.attemptOwnerToken === undefined
-      ? repository.removeExact(record, options)
-      : repository.removeTerminalExact(record, options.attemptOwnerToken)
-
-  // `commandCreated=false` 只证明当前请求没有创建 Command。若兄弟请求已
-  // 推进同 Key 证据，不能用该弱事实删除它，因此这里保留 exact-only 语义。
   if (settlement.kind === "not_created") {
-    // Resume 的 GET 可能已先证明 commandId。随后 POST 即使回传
-    // commandCreated=false，也不能把已知 Command 当成未创建而删除。
     if (expected.commandId !== null) {
       throw new PendingCommandSettlementConflictError()
     }
     try {
-      return (await removeTerminalExact(expected))
+      return (await repository.removeExact(expected))
         ? "applied"
         : "terminal_missing"
     } catch (error) {
@@ -135,7 +125,7 @@ export async function settlePendingCommand(
         throw new PendingCommandSettlementConflictError()
       }
       try {
-        return (await removeTerminalExact(current.record))
+        return (await repository.removeExact(current.record))
           ? "applied"
           : "terminal_missing"
       } catch (error) {
@@ -163,7 +153,7 @@ export async function settlePendingCommand(
         lastResponse: settlement.lastResponse,
       }
       try {
-        await repository.replaceExact(current.record, next, options)
+        await repository.replaceExact(current.record, next)
         return "applied"
       } catch (error) {
         if (error instanceof PendingCommandChangedError) continue
@@ -184,7 +174,7 @@ export async function settlePendingCommand(
       lastResponse: settlement.lastResponse,
     }
     try {
-      await repository.replaceExact(current.record, next, options)
+      await repository.replaceExact(current.record, next)
       return "applied"
     } catch (error) {
       if (error instanceof PendingCommandChangedError) continue

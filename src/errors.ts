@@ -3,8 +3,8 @@ import { EXIT_CODE } from "./constants.js"
 import { createLocalError } from "./contracts/envelope.js"
 import type {
   CliEnvelope,
+  GeneratedPublicErrorCode,
   PublicEnvelope,
-  PublicErrorCode,
 } from "./contracts/envelope.js"
 import type { CliExitCode } from "./constants.js"
 import type { JsonObject } from "./contracts/json.js"
@@ -71,7 +71,7 @@ export function usageFailure(
 export function authenticationFailure(
   message: string,
   code: Extract<
-    PublicErrorCode,
+    GeneratedPublicErrorCode,
     "INVALID_CREDENTIAL" | "CREDENTIAL_EXPIRED" | "USER_DISABLED"
   > = "INVALID_CREDENTIAL",
   details: JsonObject = {}

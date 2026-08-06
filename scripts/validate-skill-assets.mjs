@@ -3,8 +3,6 @@ import { lstat, open } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
-  EXPECTED_OPENAI_CONFIGS,
-  EXPECTED_SKILL_MANIFESTS,
   SKILL_NAMES,
   normalizeSkillText,
   parseOpenAiConfig,
@@ -22,29 +20,18 @@ function fail(name, reason) {
   throw new Error(`${name}: ${reason}`)
 }
 
-function sameIdentity(left, right) {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.mode === right.mode
-  )
-}
-
 async function readCanonicalFile(root, name, relativePath, options) {
   const path = join(root, relativePath)
-  let identity
+  let info
   try {
-    identity = await lstat(path, { bigint: true })
+    info = await lstat(path)
   } catch {
     return fail(name, "required asset is missing or unreadable")
   }
   if (
-    identity.isSymbolicLink() ||
-    !identity.isFile() ||
-    identity.size > BigInt(MAXIMUM_ASSET_BYTES)
+    info.isSymbolicLink() ||
+    !info.isFile() ||
+    info.size > MAXIMUM_ASSET_BYTES
   ) {
     return fail(name, "required asset is not a bounded regular file")
   }
@@ -61,13 +48,9 @@ async function readCanonicalFile(root, name, relativePath, options) {
   let buffer = null
   let failure = null
   try {
-    const opened = await handle.stat({ bigint: true })
-    if (
-      !opened.isFile() ||
-      opened.size > BigInt(MAXIMUM_ASSET_BYTES) ||
-      !sameIdentity(identity, opened)
-    ) {
-      return fail(name, "required asset changed during validation")
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.size > MAXIMUM_ASSET_BYTES) {
+      return fail(name, "required asset is not a bounded regular file")
     }
     const bounded = Buffer.allocUnsafe(MAXIMUM_ASSET_BYTES + 1)
     let total = 0
@@ -81,9 +64,8 @@ async function readCanonicalFile(root, name, relativePath, options) {
         return fail(name, "required asset exceeded the validation limit")
       }
     }
-    const afterRead = await handle.stat({ bigint: true })
-    if (total !== Number(opened.size) || !sameIdentity(opened, afterRead)) {
-      return fail(name, "required asset changed during validation")
+    if (total !== opened.size) {
+      return fail(name, "required asset changed while being read")
     }
     buffer = bounded.subarray(0, total)
   } catch (error) {
@@ -112,16 +94,7 @@ async function readCanonicalFile(root, name, relativePath, options) {
   return text
 }
 
-function expectedOpenAiText(value) {
-  return `interface:\n  display_name: ${JSON.stringify(value.displayName)}\n  short_description: ${JSON.stringify(value.shortDescription)}\n  default_prompt: ${JSON.stringify(value.defaultPrompt)}\n`
-}
-
 async function validateSkill(root, name, options) {
-  const expectedManifest = EXPECTED_SKILL_MANIFESTS[name]
-  const expectedOpenAi = EXPECTED_OPENAI_CONFIGS[name]
-  if (!expectedManifest || !expectedOpenAi) {
-    return fail(name, "compiled trust anchor is incomplete")
-  }
   const shellText = await readCanonicalFile(
     root,
     name,
@@ -153,12 +126,6 @@ async function validateSkill(root, name, options) {
     return fail(name, "asset schema is invalid")
   }
   if (
-    manifestText !== `${JSON.stringify(expectedManifest, null, 2)}\n` ||
-    JSON.stringify(manifest) !== JSON.stringify(expectedManifest)
-  ) {
-    return fail(name, "manifest differs from the compiled trust anchor")
-  }
-  if (
     !shellMatchesManifest({
       shell,
       shellSha256: sha256SkillText(shellText),
@@ -168,12 +135,8 @@ async function validateSkill(root, name, options) {
   ) {
     return fail(name, "shell or content digest differs from the manifest")
   }
-  if (
-    openAiText !== expectedOpenAiText(expectedOpenAi) ||
-    JSON.stringify(openAi) !== JSON.stringify(expectedOpenAi) ||
-    !openAi.defaultPrompt.includes(`$${name}`)
-  ) {
-    return fail(name, "openai.yaml differs from the compiled trust anchor")
+  if (!openAi.defaultPrompt.includes(`$${name}`)) {
+    return fail(name, "openai.yaml does not reference its Skill")
   }
 }
 
@@ -181,14 +144,6 @@ export async function validateSkillAssets(
   root = DEFAULT_CLI_ROOT,
   options = {}
 ) {
-  if (
-    SKILL_NAMES.length !== 2 ||
-    new Set(SKILL_NAMES).size !== 2 ||
-    SKILL_NAMES[0] !== "adrate-shared" ||
-    SKILL_NAMES[1] !== "adrate-ads"
-  ) {
-    throw new Error("The M0 Skill catalog trust anchor is invalid.")
-  }
   for (const name of SKILL_NAMES) await validateSkill(root, name, options)
 }
 

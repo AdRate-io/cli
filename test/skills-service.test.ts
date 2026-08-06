@@ -73,8 +73,8 @@ describe("SkillsService", () => {
           },
           {
             name: "adrate-shared",
-            version: "1.0.0",
-            minCliVersion: "0.1.0",
+            version: "1.1.0",
+            minCliVersion: "0.1.0-beta.6",
             description: expect.any(String),
           },
         ],
@@ -104,7 +104,7 @@ describe("SkillsService", () => {
     if (outcome.envelope.ok) {
       expect(outcome.envelope.data).toStrictEqual({
         name: "adrate-shared",
-        version: "1.0.0",
+        version: "1.1.0",
         path: "SKILL.md",
         content: expected,
         sha256: sha256SkillText(expected),
@@ -213,7 +213,7 @@ describe("SkillsService", () => {
     }
   })
 
-  it("rejects a jointly modified shell and disk manifest against the compiled anchor", async () => {
+  it("accepts a shell and manifest that remain self-consistent", async () => {
     const root = await packageFixture()
     const shellPath = join(root, "skills", "adrate-shared", "SKILL.md")
     const manifestPath = join(
@@ -230,14 +230,12 @@ describe("SkillsService", () => {
     await writeFile(shellPath, shell)
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
-    await expectFailure(
-      new SkillsService(new SkillCatalog(root)).list(),
-      1,
-      "LOCAL_STATE_UNSAFE"
-    )
+    await expect(
+      new SkillsService(new SkillCatalog(root)).list()
+    ).resolves.toMatchObject({ exitCode: 0 })
   })
 
-  it("rejects jointly modified full content and disk manifest against the compiled anchor", async () => {
+  it("accepts content whose digest is resealed in its manifest", async () => {
     const root = await packageFixture()
     const contentPath = join(root, "skills-content", "adrate-ads", "SKILL.md")
     const manifestPath = join(
@@ -254,10 +252,12 @@ describe("SkillsService", () => {
     await writeFile(contentPath, content)
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
-    await expectFailure(
-      new SkillsService(new SkillCatalog(root)).read({ name: "adrate-ads" }),
-      1,
-      "LOCAL_STATE_UNSAFE"
+    const outcome = await new SkillsService(new SkillCatalog(root)).read({
+      name: "adrate-ads",
+    })
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.envelope.ok && outcome.envelope.data.content).toContain(
+      "Local rewrite"
     )
   })
 

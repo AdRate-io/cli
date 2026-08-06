@@ -2,25 +2,21 @@ import { randomUUID } from "node:crypto"
 import { usageFailure } from "../errors.js"
 import { issuerForEnvironment } from "../config/issuer.js"
 import {
-  parseAuthCleanupReservation,
   parseConfig,
   parseCredentialMetadata,
   parseDeviceIssueReservation,
   parseDevicePollAttempt,
   parseDeviceState,
-  parseLogoutDeliveryJournal,
   parseTokenIndex,
 } from "./schemas.js"
 import type { SecureFileSystem } from "./secure-files.js"
 import type { CliEnvironment } from "../constants.js"
 import type {
-  AuthCleanupReservation,
   CliConfig,
   CredentialMetadata,
   DeviceAuthorizationState,
   DeviceIssueReservation,
   DevicePollAttempt,
-  LogoutDeliveryJournal,
   TokenIndex,
 } from "./schemas.js"
 import type { CliPaths } from "./paths.js"
@@ -176,56 +172,6 @@ export class CliStateStore {
 
   async clearDevicePollAttempt(): Promise<void> {
     await this.fileSystem.removeSecureFile(this.paths.devicePollAttempt)
-  }
-
-  async readAuthCleanupReservation(): Promise<AuthCleanupReservation | null> {
-    const text = await this.fileSystem.readSecureFile(
-      this.paths.authCleanupReservation
-    )
-    if (text === null) return null
-    const parsed = parseAuthCleanupReservation(
-      parseJson(text, ".auth-cleanup.json")
-    )
-    if (!parsed) {
-      throw usageFailure(
-        "The local authentication cleanup reservation is unsafe or unsupported.",
-        { reason: "metadata_mismatch" }
-      )
-    }
-    return parsed
-  }
-
-  writeAuthCleanupReservation(value: AuthCleanupReservation): Promise<void> {
-    return this.writeJson(this.paths.authCleanupReservation, value)
-  }
-
-  async clearAuthCleanupReservation(): Promise<void> {
-    await this.fileSystem.removeSecureFile(this.paths.authCleanupReservation)
-  }
-
-  async readLogoutDeliveryJournal(): Promise<LogoutDeliveryJournal | null> {
-    const text = await this.fileSystem.readSecureFile(
-      this.paths.logoutDeliveryJournal
-    )
-    if (text === null) return null
-    const parsed = parseLogoutDeliveryJournal(
-      parseJson(text, ".logout-delivery.json")
-    )
-    if (!parsed) {
-      throw usageFailure(
-        "The local logout delivery journal is unsafe or unsupported.",
-        { reason: "metadata_mismatch" }
-      )
-    }
-    return parsed
-  }
-
-  writeLogoutDeliveryJournal(value: LogoutDeliveryJournal): Promise<void> {
-    return this.writeJson(this.paths.logoutDeliveryJournal, value)
-  }
-
-  async clearLogoutDeliveryJournal(): Promise<void> {
-    await this.fileSystem.removeSecureFile(this.paths.logoutDeliveryJournal)
   }
 
   private writeJson(path: string, value: object): Promise<void> {

@@ -1,6 +1,5 @@
 import type {
   DeviceAuthorizationState,
-  DeviceIssueReservation,
   DevicePollAttempt,
   TokenIndex,
 } from "../storage/schemas.js"
@@ -10,90 +9,26 @@ export function pollAttemptMatchesDevice(
   attempt: DevicePollAttempt,
   device: DeviceAuthorizationState
 ): boolean {
-  return (
-    attempt.deviceGeneration === device.generation &&
-    attempt.environment === device.environment &&
-    attempt.issuerOrigin === device.issuerOrigin &&
-    attempt.clientInstanceId === device.clientInstanceId
-  )
+  return attempt.deviceGeneration === device.generation
 }
 
 export function pollAttemptsEqual(
   left: DevicePollAttempt,
   right: DevicePollAttempt
 ): boolean {
-  const leftAcknowledgement = left.responseAcknowledgement
-  const rightAcknowledgement = right.responseAcknowledgement
   return (
-    left.ownerToken === right.ownerToken &&
     left.deviceGeneration === right.deviceGeneration &&
-    left.environment === right.environment &&
-    left.issuerOrigin === right.issuerOrigin &&
-    left.clientInstanceId === right.clientInstanceId &&
-    left.phase === right.phase &&
-    left.deliveryVerification === right.deliveryVerification &&
-    left.storageKind === right.storageKind &&
-    left.ownerPid === right.ownerPid &&
-    left.ownerProcessFingerprint === right.ownerProcessFingerprint &&
-    left.createdAt === right.createdAt &&
-    left.dispatchedAt === right.dispatchedAt &&
-    left.verificationClaimedAt === right.verificationClaimedAt &&
-    left.leaseExpiresAt === right.leaseExpiresAt &&
-    (leftAcknowledgement === null
-      ? rightAcknowledgement === null
-      : rightAcknowledgement !== null &&
-        leftAcknowledgement.responseKind ===
-          rightAcknowledgement.responseKind &&
-        leftAcknowledgement.responseReceivedAt ===
-          rightAcknowledgement.responseReceivedAt &&
-        leftAcknowledgement.previousProtocolIntervalSeconds ===
-          rightAcknowledgement.previousProtocolIntervalSeconds &&
-        leftAcknowledgement.protocolIntervalSeconds ===
-          rightAcknowledgement.protocolIntervalSeconds &&
-        leftAcknowledgement.retryAfterSeconds ===
-          rightAcknowledgement.retryAfterSeconds &&
-        leftAcknowledgement.nextPollAt === rightAcknowledgement.nextPollAt)
+    left.storageKind === right.storageKind
   )
 }
 
-/**
- * index 只允许收敛自己的 dispatch attempt。staging 阶段仍持有
- * storage commit fence，因此还必须精确匹配进程实例。
- */
+/** TokenIndex 只收敛同一 Device generation 和存储位置的临时 staging。 */
 export function pollAttemptMatchesIndex(
   attempt: DevicePollAttempt,
   index: TokenIndex
 ): boolean {
-  if (
-    attempt.phase !== "dispatch_intent" ||
-    attempt.ownerToken !== index.pollAttemptOwnerToken ||
-    attempt.deviceGeneration !== index.deviceGeneration ||
-    attempt.environment !== index.environment ||
-    attempt.issuerOrigin !== index.issuerOrigin ||
-    attempt.clientInstanceId !== index.clientInstanceId ||
-    attempt.storageKind !== index.storageKind
-  ) {
-    return false
-  }
-  if (index.state === "stored") return true
   return (
-    index.storageCommit !== null &&
-    attempt.ownerPid === index.storageCommit.ownerPid &&
-    attempt.ownerProcessFingerprint ===
-      index.storageCommit.ownerProcessFingerprint
-  )
-}
-
-export function issueReservationMatchesDevice(
-  reservation: DeviceIssueReservation,
-  device: DeviceAuthorizationState
-): boolean {
-  return (
-    device.environment === reservation.environment &&
-    device.issuerOrigin === reservation.issuerOrigin &&
-    device.clientInstanceId === reservation.clientInstanceId &&
-    device.deviceName === reservation.deviceName &&
-    new Date(device.createdAt).getTime() >=
-      new Date(reservation.createdAt).getTime()
+    attempt.deviceGeneration === index.deviceGeneration &&
+    attempt.storageKind === index.storageKind
   )
 }

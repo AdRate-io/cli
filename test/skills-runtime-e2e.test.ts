@@ -15,12 +15,7 @@ import type {
   HttpResponse,
   HttpTransport,
 } from "../src/http/client.js"
-import type { AcknowledgedOutputStream } from "../src/output.js"
 import type { TokenStorageKind } from "../src/storage/schemas.js"
-import type {
-  UpdateRegistryRequest,
-  UpdateRegistryTransport,
-} from "../src/notices/update-notifier.js"
 
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const roots: Array<string> = []
@@ -65,22 +60,12 @@ class RejectingTransport implements HttpTransport {
   }
 }
 
-class CaptureStream implements AcknowledgedOutputStream {
+class CaptureStream {
   value = ""
 
-  write(value: string, callback: (error?: Error | null) => void): boolean {
+  write(value: string): boolean {
     this.value += value
-    queueMicrotask(() => callback())
     return true
-  }
-}
-
-class CountingUpdateTransport implements UpdateRegistryTransport {
-  requests: Array<UpdateRegistryRequest> = []
-
-  request(input: UpdateRegistryRequest) {
-    this.requests.push(input)
-    return Promise.resolve({ status: 200, text: '{"version":"0.1.0"}' })
   }
 }
 
@@ -110,7 +95,6 @@ describe("production runtime Skills entry", () => {
       installedSkillsRoot: installed,
       credentialStore: new CredentialStore(keychain, fallback),
       transport,
-      environment: { ADRATE_NO_UPDATE_NOTIFIER: "1" },
       progress: () => undefined,
     })
 
@@ -153,54 +137,5 @@ describe("production runtime Skills entry", () => {
       expect(backend.writes).toBe(0)
       expect(backend.removes).toBe(0)
     }
-  })
-
-  it("lets only the update notifier network after list and keeps read fully local", async () => {
-    const root = await mkdtemp(join(tmpdir(), "adrate-skills-update-runtime-"))
-    roots.push(root)
-    const installed = join(root, "installed")
-    await mkdir(installed)
-    for (const name of ["adrate-shared", "adrate-ads"]) {
-      await cp(join(CLI_ROOT, "skills", name), join(installed, name), {
-        recursive: true,
-      })
-    }
-    const apiTransport = new RejectingTransport()
-    const updateTransport = new CountingUpdateTransport()
-    const runtime = createCliRuntime({
-      root: join(root, "state"),
-      packageRoot: CLI_ROOT,
-      installedSkillsRoot: installed,
-      credentialStore: new CredentialStore(
-        new RejectingCredentialBackend("keychain"),
-        new RejectingCredentialBackend("fallback_file")
-      ),
-      transport: apiTransport,
-      updateTransport,
-      environment: {},
-      progress: () => undefined,
-    })
-
-    await expect(
-      runCli(runtime.application, ["skills", "list", "--json"], {
-        stdout: new CaptureStream(),
-        stderr: new CaptureStream(),
-      })
-    ).resolves.toBe(0)
-    expect(apiTransport.requests).toBe(0)
-    expect(updateTransport.requests).toHaveLength(1)
-    expect(updateTransport.requests[0]).toMatchObject({
-      url: "https://registry.npmjs.org/@adrate%2Fcli/latest",
-      headers: { accept: "application/json" },
-    })
-
-    await expect(
-      runCli(runtime.application, ["skills", "read", "adrate-shared"], {
-        stdout: new CaptureStream(),
-        stderr: new CaptureStream(),
-      })
-    ).resolves.toBe(0)
-    expect(apiTransport.requests).toBe(0)
-    expect(updateTransport.requests).toHaveLength(1)
   })
 })

@@ -1,37 +1,21 @@
 import { API_VERSION } from "../constants.js"
 import {
   cloneJsonObject,
-  hasExactKeys,
+  hasKeys,
   isCanonicalUtcIso,
   isPlainObject,
   isSafeIntegerInRange,
 } from "./json.js"
 import type { JsonObject, JsonValue } from "./json.js"
 
-export const PUBLIC_ERROR_CODES = Object.freeze([
-  "INVALID_REQUEST",
-  "INVALID_CREDENTIAL",
-  "CREDENTIAL_EXPIRED",
-  "USER_DISABLED",
-  "OWNER_REQUIRED",
-  "CAPABILITY_DENIED",
-  "RESOURCE_NOT_FOUND",
-  "TIKTOK_AUTH_UNAVAILABLE",
-  "TIKTOK_AUTH_ID_REQUIRED",
-  "TIKTOK_AUTH_INVALID_FOR_ACCOUNT",
-  "RESOURCE_BUSY",
-  "IDEMPOTENCY_CONFLICT",
-  "RESOURCE_OPERATION_UNSUPPORTED",
-  "RESOURCE_STATE_INCOMPLETE",
-  "RATE_LIMITED",
-  "DAILY_QUOTA_EXCEEDED",
-  "UPSTREAM_RATE_LIMITED",
-  "UPSTREAM_ERROR",
-  "DEPENDENCY_UNAVAILABLE",
-] as const)
-
-export type PublicErrorCode = (typeof PUBLIC_ERROR_CODES)[number]
-const PUBLIC_ERROR_CODE_SET = new Set<string>(PUBLIC_ERROR_CODES)
+/** CLI 本地会生成的远端形状错误，不是服务端错误码闭集。 */
+export type GeneratedPublicErrorCode =
+  | "INVALID_REQUEST"
+  | "INVALID_CREDENTIAL"
+  | "CREDENTIAL_EXPIRED"
+  | "USER_DISABLED"
+  | "RATE_LIMITED"
+  | "DEPENDENCY_UNAVAILABLE"
 
 export const LOCAL_ERROR_CODES = Object.freeze([
   "LOCAL_STATE_UNSAFE",
@@ -43,7 +27,7 @@ export const LOCAL_ERROR_CODES = Object.freeze([
 ] as const)
 
 export type LocalErrorCode = (typeof LOCAL_ERROR_CODES)[number]
-export type CliErrorCode = PublicErrorCode | LocalErrorCode
+export type CliErrorCode = GeneratedPublicErrorCode | LocalErrorCode
 
 export interface PublicUsageBucket {
   limit: number | null
@@ -83,7 +67,7 @@ export interface PublicSuccessEnvelope extends JsonObject {
 export interface PublicErrorEnvelope extends JsonObject {
   ok: false
   error: {
-    code: PublicErrorCode
+    code: string
     message: string
     retryable: boolean
     details: JsonObject
@@ -206,7 +190,7 @@ export function decodePublicEnvelope(text: string): EnvelopeDecodeResult {
 
   if (
     raw.ok === true &&
-    hasExactKeys(raw, ["ok", "data", "meta"]) &&
+    hasKeys(raw, ["ok", "data", "meta"]) &&
     isPlainObject(raw.data)
   ) {
     return {
@@ -221,11 +205,11 @@ export function decodePublicEnvelope(text: string): EnvelopeDecodeResult {
   }
   if (
     raw.ok === false &&
-    hasExactKeys(raw, ["ok", "error", "meta"]) &&
+    hasKeys(raw, ["ok", "error", "meta"]) &&
     isPlainObject(raw.error) &&
-    hasExactKeys(raw.error, ["code", "message", "retryable", "details"]) &&
+    hasKeys(raw.error, ["code", "message", "retryable", "details"]) &&
     typeof raw.error.code === "string" &&
-    PUBLIC_ERROR_CODE_SET.has(raw.error.code) &&
+    raw.error.code.length > 0 &&
     typeof raw.error.message === "string" &&
     typeof raw.error.retryable === "boolean" &&
     isPlainObject(raw.error.details)
@@ -267,7 +251,7 @@ export function createLocalSuccess(
 
 export function createLocalError(
   requestId: string,
-  code: PublicErrorCode,
+  code: GeneratedPublicErrorCode,
   message: string,
   retryable: boolean,
   details?: JsonObject
