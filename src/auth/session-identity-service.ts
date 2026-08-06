@@ -49,7 +49,7 @@ export class SessionIdentityService {
   private readonly cleanup: AuthCleanupCoordinator
 
   constructor(private readonly context: AuthContext) {
-    this.cleanup = new AuthCleanupCoordinator(context.local, context.now)
+    this.cleanup = new AuthCleanupCoordinator(context.local)
   }
 
   async status(global: GlobalOptions): Promise<CliOutcome> {

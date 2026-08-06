@@ -13,6 +13,7 @@ export interface AuthLoginInput {
   global: GlobalOptions
   noWait: boolean
   resume: boolean
+  device?: boolean
   deviceName?: string
 }
 
@@ -20,6 +21,7 @@ export interface ValidatedAuthLoginInput {
   global: GlobalOptions
   noWait: boolean
   resume: boolean
+  device: boolean
   deviceName: string | null
   deviceNameProvided: boolean
 }
@@ -47,8 +49,15 @@ export function cleanDeviceName(value: string | undefined): string | null {
 export function validateAuthLoginInput(
   input: AuthLoginInput
 ): ValidatedAuthLoginInput {
+  const device = input.device ?? false
   if (input.noWait && input.resume) {
     throw usageFailure("--no-wait and --resume are mutually exclusive.")
+  }
+  if (device && input.noWait) {
+    throw usageFailure("--device and --no-wait are mutually exclusive.")
+  }
+  if (device && input.resume) {
+    throw usageFailure("--device and --resume are mutually exclusive.")
   }
   if (input.global.test && input.resume) {
     throw usageFailure("--test cannot be used with auth login --resume.")
@@ -56,15 +65,16 @@ export function validateAuthLoginInput(
   if (input.resume && input.deviceName !== undefined) {
     throw usageFailure("--device-name cannot be used with --resume.")
   }
-  if (input.global.noInput && !input.noWait && !input.resume) {
+  if (input.global.noInput && !input.noWait && !input.resume && !device) {
     throw usageFailure(
-      "auth login with --no-input requires --no-wait or --resume."
+      "auth login with --no-input requires --no-wait, --resume, or --device."
     )
   }
   return {
     global: input.global,
     noWait: input.noWait,
     resume: input.resume,
+    device,
     deviceName: input.resume ? null : cleanDeviceName(input.deviceName),
     deviceNameProvided: input.deviceName !== undefined,
   }

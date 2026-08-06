@@ -14,16 +14,9 @@ import { randomUUID } from "node:crypto"
 import { TextDecoder } from "node:util"
 import { dependencyFailure } from "../errors.js"
 import { SecureFileLockCoordinator } from "./secure-file-lock.js"
-import type {
-  LockRequirement,
-  SecureFileProcessIdentityProbe,
-} from "./secure-file-lock.js"
+import type { LockRequirement } from "./secure-file-lock.js"
 
-export type {
-  LockRequirement,
-  SecureFileProcessIdentity,
-  SecureFileProcessIdentityProbe,
-} from "./secure-file-lock.js"
+export type { LockRequirement } from "./secure-file-lock.js"
 
 /**
  * 变更类文件操作的锁需求声明。省略时按 `if_held` 处理，与既有调用点
@@ -36,7 +29,6 @@ export interface SecureMutationOptions {
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
 const MAX_LOCAL_FILE_BYTES = 1024 * 1024
-const DEFAULT_LOCK_STALE_AFTER_MS = 5 * 60 * 1000
 const STRICT_UTF8_DECODER = new TextDecoder("utf-8", {
   fatal: true,
   ignoreBOM: true,
@@ -52,12 +44,8 @@ export interface WindowsAclController {
 export interface SecureFileSystemOptions {
   root: string
   platform?: NodeJS.Platform
-  now?: () => number
   uid?: number | null
   windowsAcl?: WindowsAclController
-  lockStaleAfterMs?: number
-  processSignal?: (pid: number, signal: 0) => void | Promise<void>
-  processIdentity?: SecureFileProcessIdentityProbe
   /** 仅供确定性文件竞态回归使用；生产 runtime 不传入。 */
   testHooks?: {
     afterReadFileOpened?: (path: string) => void | Promise<void>
@@ -125,31 +113,13 @@ export class SecureFileSystem {
       (typeof process.getuid === "function" ? process.getuid() : null)
     this.windowsAcl = options.windowsAcl
     this.testHooks = options.testHooks
-    const now = options.now ?? Date.now
-    const processSignal =
-      options.processSignal ??
-      ((pid: number, signal: 0) => {
-        process.kill(pid, signal)
-      })
     this.lockCoordinator = new SecureFileLockCoordinator({
-      now,
-      platform: this.platform,
-      staleAfterMs: options.lockStaleAfterMs ?? DEFAULT_LOCK_STALE_AFTER_MS,
-      processSignal,
-      ...(options.processIdentity
-        ? { processIdentity: options.processIdentity }
-        : {}),
       operations: {
         assertContained: (path) => this.assertContained(path),
         ensureDirectory: (path) => this.ensureDirectory(path),
         verifyFile: (path) => this.verifyPath(path, "file"),
-        verifyDirectoryChain: (path) => this.verifyDirectoryChain(path),
-        verifyResolvedParent: (path) => this.verifyResolvedParent(path),
         secureCreatedFile: (path) => this.secureCreatedFile(path),
         syncDirectory: (path) => this.syncDirectory(path),
-        readFileIdentity: (path) => this.readFileIdentity(path),
-        assertFileIdentity: (path, expected) =>
-          this.assertFileIdentity(path, expected),
         busyError: () => new SecureFileLockBusyError(),
       },
     })

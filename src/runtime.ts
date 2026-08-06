@@ -3,7 +3,6 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { AuthService } from "./auth/auth-service.js"
 import { LocalCredentialCoordinator } from "./auth/local-credentials.js"
-import { DefaultProcessIdentityProbe } from "./auth/process-identity.js"
 import { CliApplication } from "./application.js"
 import { CommandQueryService } from "./commands/command-query-service.js"
 import { CommandResumeService } from "./commands/command-resume-service.js"
@@ -12,6 +11,7 @@ import { PendingCommandService } from "./commands/pending-command-service.js"
 import { ReadCommandService } from "./commands/read-service.js"
 import { StatusCommandDispatcher } from "./commands/status-command-dispatcher.js"
 import { StatusCommandService } from "./commands/status-command-service.js"
+import { FeedbackCommandService } from "./commands/feedback-command-service.js"
 import { PublicHttpClient } from "./http/client.js"
 import {
   CredentialStore,
@@ -23,29 +23,27 @@ import { DefaultNativeProcessRunner } from "./storage/native-process.js"
 import { SecureFileSystem, hardenProcessUmask } from "./storage/secure-files.js"
 import { CliStateStore } from "./storage/state-store.js"
 import { SkillCatalog } from "./skills/skill-catalog.js"
+import { SkillsInstallService } from "./skills/skills-install-service.js"
 import { SkillsService } from "./skills/skills-service.js"
 import { SkillsNotifier } from "./skills/skills-notifier.js"
-import { UpdateNotifier } from "./notices/update-notifier.js"
 import {
   PowerShellWindowsAclController,
   trustedWindowsPowerShellPath,
 } from "./storage/windows-acl.js"
-import type { ProcessIdentityProbe } from "./auth/process-identity.js"
 import type { HttpTransport } from "./http/client.js"
-import type { UpdateRegistryTransport } from "./notices/update-notifier.js"
 
 export interface CliRuntimeOptions {
   root?: string
   transport?: HttpTransport
   credentialStore?: CredentialStore
-  processIdentity?: ProcessIdentityProbe
   environment?: NodeJS.ProcessEnv
   now?: () => Date
+  sleep?: (milliseconds: number) => Promise<void>
   generateIdempotencyKey?: () => string
+  readFeedbackStdin?: () => Promise<string>
   progress?: (message: string) => void
   packageRoot?: string
   installedSkillsRoot?: string
-  updateTransport?: UpdateRegistryTransport
 }
 
 /**
@@ -61,6 +59,7 @@ export interface CliRuntime {
   commandQuery: CommandQueryService
   pendingCommands: PendingCommandService
   commandResume: CommandResumeService
+  feedback: FeedbackCommandService
   dispatcher: StatusCommandDispatcher
   pendingRepository: PendingCommandRepository
   http: PublicHttpClient
@@ -69,7 +68,6 @@ export interface CliRuntime {
   fileSystem: SecureFileSystem
   skills: SkillsService
   skillsNotifier: SkillsNotifier
-  updateNotifier: UpdateNotifier
 }
 
 const DEFAULT_PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url))
@@ -84,11 +82,8 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
           trustedWindowsPowerShellPath()
         )
       : undefined
-  const processIdentity =
-    options.processIdentity ?? new DefaultProcessIdentityProbe()
   const fileSystem = new SecureFileSystem({
     root: paths.root,
-    processIdentity,
     ...(windowsAcl ? { windowsAcl } : {}),
   })
   const state = new CliStateStore(fileSystem, paths)
@@ -99,7 +94,6 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
       new FallbackFileCredentialBackend(fileSystem, paths)
     )
   const local = new LocalCredentialCoordinator(state, credentials, {
-    processIdentity,
     ...(options.now ? { now: options.now } : {}),
   })
   const http = new PublicHttpClient(options.transport)
@@ -109,6 +103,7 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     local,
     environment,
     ...(options.now ? { now: options.now } : {}),
+    ...(options.sleep ? { sleep: options.sleep } : {}),
     progress:
       options.progress ??
       ((message) => {
@@ -117,7 +112,6 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
   })
   const reads = new ReadCommandService(http, local, environment)
   const pendingRepository = new PendingCommandRepository(fileSystem, paths, {
-    processIdentity,
     ...(options.now ? { now: options.now } : {}),
   })
   const dispatcher = new StatusCommandDispatcher(
@@ -156,22 +150,30 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     dispatcher,
     ...(options.now ? { now: options.now } : {}),
   })
+  const feedback = new FeedbackCommandService(http, local, {
+    environment,
+    ...(options.generateIdempotencyKey
+      ? { generateIdempotencyKey: options.generateIdempotencyKey }
+      : {}),
+    ...(options.readFeedbackStdin
+      ? { readStdin: options.readFeedbackStdin }
+      : {}),
+  })
   const skillCatalog = new SkillCatalog(
     options.packageRoot ?? DEFAULT_PACKAGE_ROOT
   )
+  const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT
+  const installedSkillsRoot =
+    options.installedSkillsRoot ?? join(homedir(), ".agents", "skills")
   const skills = new SkillsService(skillCatalog)
+  const skillsInstall = new SkillsInstallService(skillCatalog, {
+    packageRoot,
+    installedSkillsRoot,
+  })
   const skillsNotifier = new SkillsNotifier({
     catalog: skillCatalog,
-    installedSkillsRoot:
-      options.installedSkillsRoot ?? join(homedir(), ".agents", "skills"),
+    installedSkillsRoot,
     environment,
-  })
-  const updateNotifier = new UpdateNotifier({
-    fileSystem,
-    paths,
-    environment,
-    ...(options.now ? { now: options.now } : {}),
-    ...(options.updateTransport ? { transport: options.updateTransport } : {}),
   })
   const application = new CliApplication(
     auth,
@@ -181,10 +183,11 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
       commandQuery,
       pendingCommands,
       commandResume,
+      feedback,
       skills,
+      skillsInstall,
     },
-    skillsNotifier,
-    updateNotifier
+    skillsNotifier
   )
 
   return {
@@ -195,6 +198,7 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     commandQuery,
     pendingCommands,
     commandResume,
+    feedback,
     dispatcher,
     pendingRepository,
     http,
@@ -203,7 +207,6 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     fileSystem,
     skills,
     skillsNotifier,
-    updateNotifier,
   }
 }
 

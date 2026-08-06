@@ -6,11 +6,6 @@ import {
   SecureFileLockBusyError,
 } from "../storage/secure-files.js"
 import {
-  PendingCommandAttemptBusyError,
-  PendingCommandAttemptCoordinator,
-  PendingCommandAttemptUnsafeError,
-} from "./pending-command-attempt.js"
-import {
   createPreparedPendingCommand,
   parsePendingCommandJson,
   pendingCredentialScopeMatches,
@@ -22,7 +17,6 @@ import {
 } from "./pending-command-contract.js"
 import type { CliPaths } from "../storage/paths.js"
 import type { SecureFileSystem } from "../storage/secure-files.js"
-import type { ProcessIdentityProbe } from "../auth/process-identity.js"
 import type {
   NewPendingCommandRecord,
   PendingCommandIntent,
@@ -104,12 +98,6 @@ export class PendingCommandChangedError extends SecureFileError {
 
 export interface PendingCommandRepositoryOptions {
   now?: () => Date
-  processIdentity?: ProcessIdentityProbe
-  generateAttemptOwnerToken?: () => string
-}
-
-export interface PendingCommandMutationOptions {
-  attemptOwnerToken?: string
 }
 
 function classifySecureFileError(error: unknown): PendingCommandInvalidReason {
@@ -159,26 +147,11 @@ function isTransientMissingLock(error: unknown): boolean {
 }
 
 export class PendingCommandRepository {
-  readonly attempts: PendingCommandAttemptCoordinator
-
   constructor(
     private readonly fileSystem: SecureFileSystem,
     private readonly paths: CliPaths,
-    options: PendingCommandRepositoryOptions = {}
-  ) {
-    this.attempts = new PendingCommandAttemptCoordinator(fileSystem, paths, {
-      withKeyLock: (idempotencyKey, action) =>
-        this.withContendedLock(this.keyLockPath(idempotencyKey), action),
-      readPending: (idempotencyKey) => this.read(idempotencyKey),
-      ...(options.now ? { now: options.now } : {}),
-      ...(options.processIdentity
-        ? { processIdentity: options.processIdentity }
-        : {}),
-      ...(options.generateAttemptOwnerToken
-        ? { generateOwnerToken: options.generateAttemptOwnerToken }
-        : {}),
-    })
-  }
+    private readonly options: PendingCommandRepositoryOptions = {}
+  ) {}
 
   recordPath(idempotencyKey: string): string {
     validateIdempotencyKey(idempotencyKey)
@@ -252,11 +225,6 @@ export class PendingCommandRepository {
             invalidEntries.push({ recordId, reason: "schema" })
             continue
           }
-          // atomicCreate/atomicWrite 可在 link/rename 前后被强制终止，
-          // 也可被另一资源的并发 scan 看到活跃临时文件。
-          // 只有严格内部 basename 且通过 owner/mode/size/symlink
-          // 检查的普通文件才作为未发布证据忽略；不在 scan
-          // 中删除，避免误删其他进程尚未发布的活跃文件。
           await this.fileSystem.readSecureFile(path)
         } catch (error) {
           if (isMissingPathError(error)) continue
@@ -270,8 +238,6 @@ export class PendingCommandRepository {
       const match = RECORD_FILE_PATTERN.exec(name)
       if (!match) {
         invalidEntries.push({
-          // 只有已通过固定文件名语法的 SHA-256 才能回显。任意其他
-          // basename 可能本身就是用户 Key、Token 或其他秘密。
           recordId: null,
           reason: "schema",
         })
@@ -346,7 +312,6 @@ export class PendingCommandRepository {
         })
       }
     }
-    invalidEntries.push(...(await this.attempts.scanAgainst(records)))
     return {
       records,
       invalidEntries: invalidEntries.sort((left, right) =>
@@ -428,104 +393,41 @@ export class PendingCommandRepository {
         )
       }
 
-      return this.withContendedLock(
-        this.keyLockPath(candidate.idempotencyKey),
-        async () => {
-          const sibling = await this.read(candidate.idempotencyKey)
-          if (sibling.kind === "found") {
-            return this.classifyExisting(sibling, scope, candidate.intent, true)
-          }
-          if (sibling.kind === "unsafe") {
-            return {
-              kind: "unsafe" as const,
-              scan: {
-                records: scan.records,
-                invalidEntries: [sibling.invalidEntry],
-              },
-            }
-          }
-
-          try {
-            await this.attempts.completeTerminalCleanupBeforePrepareLocked(
-              candidate.idempotencyKey
-            )
-          } catch (error) {
-            const invalidEntry =
-              error instanceof PendingCommandAttemptUnsafeError
-                ? error.invalidEntry
-                : error instanceof PendingCommandAttemptBusyError
-                  ? {
-                      recordId: pendingRecordId(candidate.idempotencyKey),
-                      reason: "schema" as const,
-                    }
-                  : null
-            if (invalidEntry === null) throw error
-            return {
-              kind: "unsafe" as const,
-              scan: {
-                records: scan.records,
-                invalidEntries: [invalidEntry],
-              },
-            }
-          }
-
-          const beforeCreate = await this.read(candidate.idempotencyKey)
-          if (beforeCreate.kind === "found") {
-            return this.classifyExisting(
-              beforeCreate,
-              scope,
-              candidate.intent,
-              true
-            )
-          }
-          if (beforeCreate.kind === "unsafe") {
-            return {
-              kind: "unsafe" as const,
-              scan: {
-                records: scan.records,
-                invalidEntries: [beforeCreate.invalidEntry],
-              },
-            }
-          }
-
-          const result = await this.fileSystem.atomicCreate(
-            this.recordPath(candidate.idempotencyKey),
-            serializePendingCommand(candidate)
-          )
-          if (result === "created") {
-            return {
-              kind: "created" as const,
-              recordId: pendingRecordId(candidate.idempotencyKey),
-              record: candidate,
-            }
-          }
-          const raced = await this.read(candidate.idempotencyKey)
-          if (raced.kind !== "found") {
-            return {
-              kind: "unsafe" as const,
-              scan: {
-                records: scan.records,
-                invalidEntries: [
-                  raced.kind === "unsafe"
-                    ? raced.invalidEntry
-                    : {
-                        recordId: pendingRecordId(candidate.idempotencyKey),
-                        reason: "schema" as const,
-                      },
-                ],
-              },
-            }
-          }
-          return this.classifyExisting(raced, scope, candidate.intent, true)
-        }
+      const result = await this.fileSystem.atomicCreate(
+        this.recordPath(candidate.idempotencyKey),
+        serializePendingCommand(candidate)
       )
+      if (result === "created") {
+        return {
+          kind: "created" as const,
+          recordId: pendingRecordId(candidate.idempotencyKey),
+          record: candidate,
+        }
+      }
+      const raced = await this.read(candidate.idempotencyKey)
+      if (raced.kind !== "found") {
+        return {
+          kind: "unsafe" as const,
+          scan: {
+            records: scan.records,
+            invalidEntries: [
+              raced.kind === "unsafe"
+                ? raced.invalidEntry
+                : {
+                    recordId: pendingRecordId(candidate.idempotencyKey),
+                    reason: "schema" as const,
+                  },
+            ],
+          },
+        }
+      }
+      return this.classifyExisting(raced, scope, candidate.intent, true)
     })
   }
 
   async replaceExact(
     expected: PendingCommandRecord,
-    next: PendingCommandRecord,
-    options: PendingCommandMutationOptions = {}
+    next: PendingCommandRecord
   ): Promise<void> {
     if (
       !pendingRecordsHaveSameIdentity(expected, next) ||
@@ -536,10 +438,6 @@ export class PendingCommandRepository {
     await this.withContendedLock(
       this.keyLockPath(expected.idempotencyKey),
       async () => {
-        await this.attempts.assertMutationAllowedLocked(
-          expected,
-          options.attemptOwnerToken
-        )
         const current = await this.read(expected.idempotencyKey)
         if (
           current.kind !== "found" ||
@@ -555,41 +453,7 @@ export class PendingCommandRepository {
     )
   }
 
-  async removeExact(
-    expected: PendingCommandRecord,
-    options: PendingCommandMutationOptions = {}
-  ): Promise<boolean> {
-    return this.withContendedLock(
-      this.keyLockPath(expected.idempotencyKey),
-      async () => {
-        await this.attempts.assertMutationAllowedLocked(
-          expected,
-          options.attemptOwnerToken
-        )
-        const current = await this.read(expected.idempotencyKey)
-        if (current.kind === "missing") return false
-        if (
-          current.kind !== "found" ||
-          !recordsExactlyEqual(current.record, expected)
-        ) {
-          throw new PendingCommandChangedError()
-        }
-        return this.fileSystem.removeSecureFile(
-          this.recordPath(expected.idempotencyKey)
-        )
-      }
-    )
-  }
-
-  /**
-   * 有 durable attempt owner 的终态删除必须先持久化
-   * terminal_cleanup_intent。该方法与 pending 删除共用同一把短锁，
-   * 但两个文件步骤之间仍允许崩溃，后续由 attempt 恢复闸门收尾。
-   */
-  async removeTerminalExact(
-    expected: PendingCommandRecord,
-    attemptOwnerToken: string
-  ): Promise<boolean> {
+  async removeExact(expected: PendingCommandRecord): Promise<boolean> {
     return this.withContendedLock(
       this.keyLockPath(expected.idempotencyKey),
       async () => {
@@ -601,10 +465,6 @@ export class PendingCommandRepository {
         ) {
           throw new PendingCommandChangedError()
         }
-        await this.attempts.markTerminalCleanupLocked(
-          expected,
-          attemptOwnerToken
-        )
         return this.fileSystem.removeSecureFile(
           this.recordPath(expected.idempotencyKey)
         )

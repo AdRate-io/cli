@@ -1,6 +1,5 @@
 import { join } from "node:path"
 import {
-  EXPECTED_SKILL_MANIFESTS,
   SKILL_NAMES,
   parseSkillFrontmatter,
   parseSkillManifest,
@@ -48,13 +47,6 @@ export interface CatalogSkillFile extends ReadSkillFile {
   path: string
 }
 
-const BUNDLED_MANIFESTS: Readonly<Record<SkillName, SkillManifest>> =
-  EXPECTED_SKILL_MANIFESTS
-
-function sameManifest(left: SkillManifest, right: SkillManifest): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
-
 function knownSkillName(value: string): value is SkillName {
   return (SKILL_NAMES as ReadonlyArray<string>).includes(value)
 }
@@ -85,11 +77,9 @@ export class SkillCatalog {
       ])
       const manifest = parseSkillManifest(manifestFile.content, name)
       const shell = parseSkillFrontmatter(shellFile.content)
-      const expected = BUNDLED_MANIFESTS[name]
       if (
         !manifest ||
         !shell ||
-        !sameManifest(manifest, expected) ||
         !shellMatchesManifest({
           shell,
           shellSha256: shellFile.sha256,
@@ -98,7 +88,7 @@ export class SkillCatalog {
       ) {
         throw new BundledSkillCorruptError()
       }
-      return expected
+      return manifest
     } catch (error) {
       if (error instanceof BundledSkillCorruptError) throw error
       if (
@@ -111,8 +101,10 @@ export class SkillCatalog {
     }
   }
 
-  requiredManifests(): Array<SkillManifest> {
-    return SKILL_NAMES.map((name) => ({ ...BUNDLED_MANIFESTS[name] }))
+  async requiredManifests(): Promise<Array<SkillManifest>> {
+    const manifests: Array<SkillManifest> = []
+    for (const name of SKILL_NAMES) manifests.push(await this.definition(name))
+    return manifests
   }
 
   async list(): Promise<Array<CatalogSkill>> {

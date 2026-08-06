@@ -14,6 +14,7 @@ export const M0_CAPABILITIES = Object.freeze([
   "ads.campaign.read",
   "ads.report.read",
   "ads.campaign.status.write",
+  "feedback.write",
 ] as const)
 
 export const M0_SCOPE = M0_CAPABILITIES.join(" ")
@@ -32,9 +33,6 @@ export const DEADLINES_MS = Object.freeze({
   connect: 10_000,
 })
 
-export const DEVICE_DELIVERY_SAFETY_WINDOW_MS = 10 * 60 * 1000 + 15 * 1000
-export const DEVICE_TRANSACTION_LEASE_MS = DEADLINES_MS.standard + 30_000
-
 export const EXIT_CODE = Object.freeze({
   success: 0,
   business: 1,
@@ -46,3 +44,11 @@ export const EXIT_CODE = Object.freeze({
 
 export type CliExitCode = (typeof EXIT_CODE)[keyof typeof EXIT_CODE]
 export type CliEnvironment = "production" | "test"
+
+/**
+ * 远端 DELETE /sessions/current 响应中表示凭据已不可用的错误码。
+ * 归一化和 logout recovery 共用：拿到这些码可安全清理本地凭据。
+ */
+export const INACTIVE_CREDENTIAL_CODES = Object.freeze(
+  new Set(["INVALID_CREDENTIAL", "CREDENTIAL_EXPIRED", "USER_DISABLED"])
+)

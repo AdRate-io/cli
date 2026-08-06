@@ -39,9 +39,15 @@ function createHarness() {
     commandResume: {
       resume: vi.fn(() => Promise.resolve(successOutcome("resume"))),
     },
+    feedback: {
+      submit: vi.fn(() => Promise.resolve(successOutcome("feedback"))),
+    },
     skills: {
       list: vi.fn(() => Promise.resolve(successOutcome("skills-list"))),
       read: vi.fn(() => Promise.resolve(successOutcome("skills-read"))),
+    },
+    skillsInstall: {
+      install: vi.fn(() => Promise.resolve(successOutcome("skills-install"))),
     },
   }
   return {
@@ -202,6 +208,7 @@ describe("CliApplication local surface", () => {
       },
       noWait: true,
       resume: false,
+      device: false,
       deviceName: "Boss-Mac",
     })
     expect(harness.reads.execute).not.toHaveBeenCalled()
@@ -239,6 +246,32 @@ describe("CliApplication local surface", () => {
         test: false,
       }
     )
+  })
+
+  it("反馈命令只向独立服务分派显式输入和公共 Key", async () => {
+    const harness = createHarness()
+    await harness.application.execute([
+      "feedback",
+      "--category",
+      "bug",
+      "--message=--literal $() text",
+      "--idempotency-key",
+      "feedback_key",
+      "--request-id",
+      "feedback_request",
+    ])
+
+    expect(harness.commands.feedback.submit).toHaveBeenCalledWith({
+      category: "bug",
+      message: "--literal $() text",
+      messageStdin: false,
+      idempotencyKey: "feedback_key",
+      requestId: "feedback_request",
+    })
+    expect(harness.commands.campaignStatus.status).not.toHaveBeenCalled()
+    expect(harness.commands.pendingCommands.pending).not.toHaveBeenCalled()
+    expect(harness.reads.execute).not.toHaveBeenCalled()
+    expect(harness.auth.login).not.toHaveBeenCalled()
   })
 
   it("T10 命令显式穷尽分发，全局 Key/requestId 与命令参数无漂移", async () => {

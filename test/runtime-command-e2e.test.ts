@@ -7,10 +7,10 @@ import { HttpTransportError } from "../src/http/client.js"
 import { CredentialStore } from "../src/storage/credential-backend.js"
 import {
   CREDENTIAL_ID,
+  DEVICE_CODE,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
   deferred,
-  stableTestProcessIdentity,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -26,7 +26,6 @@ import type {
 } from "../src/storage/credential-backend.js"
 import type { PublicCommandDto } from "../src/contracts/command.js"
 import type { TokenIndex, TokenStorageKind } from "../src/storage/schemas.js"
-import type { AcknowledgedOutputStream } from "../src/output.js"
 import type { TemporaryStateFixture } from "./helpers.js"
 
 const NOW = new Date("2026-07-31T08:00:00.000Z")
@@ -79,12 +78,11 @@ class ControlledTransport implements HttpTransport {
   }
 }
 
-class CaptureStream implements AcknowledgedOutputStream {
+class CaptureStream {
   readonly values: Array<string> = []
 
-  write(value: string, callback: (error?: Error | null) => void): boolean {
+  write(value: string): boolean {
     this.values.push(value)
-    queueMicrotask(() => callback())
     return true
   }
 }
@@ -118,8 +116,6 @@ function command(status: "pending" | "succeeded", key = KEY): PublicCommandDto {
     capabilityId: "ads.campaign.status.write",
     status,
     isFinal: !pending,
-    reason: null,
-    suggestedAction: pending ? "query_command" : null,
     target: {
       advertiserId: "70001",
       campaignId: "80001",
@@ -128,12 +124,6 @@ function command(status: "pending" | "succeeded", key = KEY): PublicCommandDto {
     beforeStatus: pending ? null : "ENABLE",
     afterStatus: null,
     verificationBasis: pending ? null : "verified_no_op",
-    attemptCount: 0,
-    createdAt: NOW.toISOString(),
-    startedAt: null,
-    completedAt: pending ? null : "2026-07-31T08:00:01.000Z",
-    recoverableUntil: pending ? "2026-08-01T08:00:00.000Z" : null,
-    lastReconcileAt: null,
   }
 }
 
@@ -232,6 +222,23 @@ function notFoundResponse(input: HttpRequest): Promise<HttpResponse> {
   })
 }
 
+function jsonResponse(
+  input: HttpRequest,
+  status: number,
+  body: unknown
+): Promise<HttpResponse> {
+  const id = requestId(input)
+  return Promise.resolve({
+    status,
+    requestId: id,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": id,
+    },
+    text: JSON.stringify(body),
+  })
+}
+
 async function createHarness(
   handler: TransportHandler,
   options: { key?: string } = {}
@@ -248,12 +255,10 @@ async function createHarness(
     root: fixture.root,
     transport,
     credentialStore,
-    processIdentity: stableTestProcessIdentity("runtime-command-e2e"),
     now: () => new Date(NOW),
     environment: {
       ADRATE_NO_CREDENTIAL_NOTIFIER: "1",
       ADRATE_NO_SKILLS_NOTIFIER: "1",
-      ADRATE_NO_UPDATE_NOTIFIER: "1",
     },
     generateIdempotencyKey: () => options.key ?? KEY,
     progress: () => undefined,
@@ -309,6 +314,124 @@ async function runHuman(
   return { exitCode, stdout, stderr }
 }
 
+describe("production runtime Auth entry E2E", () => {
+  it("routes both --device JSON lines through the runCli stdout stream", async () => {
+    const fixture = await createTemporaryStateFixture()
+    fixtures.push(fixture)
+    const keychain = new MemoryCredentialBackend("keychain")
+    const credentialStore = new CredentialStore(
+      keychain,
+      new MemoryCredentialBackend("fallback_file")
+    )
+    let nowMs = NOW.getTime()
+    const tokenRequestEntered = deferred()
+    const releaseTokenResponse = deferred()
+    const transport = new ControlledTransport(async (input) => {
+      if (input.path === "/oauth/device/code") {
+        return jsonResponse(input, 200, {
+          device_code: DEVICE_CODE,
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://app.adrate.io/device",
+          verification_uri_complete:
+            "https://app.adrate.io/device?user_code=ABCD-EFGH",
+          expires_in: 600,
+          interval: 1,
+        })
+      }
+      if (input.path === "/oauth/token") {
+        tokenRequestEntered.resolve()
+        await releaseTokenResponse.promise
+        return jsonResponse(input, 200, {
+          access_token: OWNER_SESSION_TOKEN,
+          token_type: "Bearer",
+          expires_in: 900,
+          activation_expires_at: "2026-07-31T08:10:00.000Z",
+          idle_expires_at: null,
+          absolute_expires_at: "2026-08-30T08:00:00.000Z",
+          credential_kind: "adrate_sliding_session",
+        })
+      }
+      if (input.path === "/public/v1/me") {
+        return jsonResponse(input, 200, {
+          ok: true,
+          data: {
+            principal: {
+              kind: "owner_cli_session",
+              credentialId: CREDENTIAL_ID,
+            },
+            team: { teamId: 7, teamName: "AdRate" },
+            credential: {
+              activationExpiresAt: null,
+              idleExpiresAt: "2026-07-31T09:00:00.000Z",
+              absoluteExpiresAt: "2026-08-30T08:00:00.000Z",
+            },
+          },
+          meta: { requestId: requestId(input), apiVersion: "v1" },
+        })
+      }
+      throw new Error(`Unexpected Auth request: ${input.path}`)
+    })
+    const runtime = createCliRuntime({
+      root: fixture.root,
+      transport,
+      credentialStore,
+      now: () => new Date(nowMs),
+      sleep: (milliseconds) => {
+        nowMs += milliseconds
+        return Promise.resolve()
+      },
+      environment: {
+        ADRATE_NO_CREDENTIAL_NOTIFIER: "1",
+        ADRATE_NO_SKILLS_NOTIFIER: "1",
+      },
+      progress: () => undefined,
+    })
+    const stdout = new CaptureStream()
+    const stderr = new CaptureStream()
+
+    const running = runCli(
+      runtime.application,
+      [
+        "auth",
+        "login",
+        "--device",
+        "--no-input",
+        "--request-id",
+        "runtime_auth_e2e",
+        "--json",
+      ],
+      { stdout, stderr }
+    )
+
+    await tokenRequestEntered.promise
+    expect(stdout.values).toHaveLength(1)
+    expect(JSON.parse(stdout.values[0]!)).toMatchObject({
+      userCode: "ABCD-EFGH",
+    })
+    releaseTokenResponse.resolve()
+
+    const exitCode = await running
+    expect(exitCode).toBe(0)
+    expect(stderr.values).toHaveLength(0)
+    expect(stdout.values).toHaveLength(2)
+    const lines = stdout.values.join("").trim().split("\n")
+    expect(lines).toHaveLength(2)
+    expect(JSON.parse(lines[0]!)).toStrictEqual({
+      verificationUriComplete:
+        "https://app.adrate.io/device?user_code=ABCD-EFGH",
+      verificationUri: "https://app.adrate.io/device",
+      userCode: "ABCD-EFGH",
+      expiresIn: 600,
+    })
+    expect(JSON.parse(lines[1]!)).toMatchObject({ ok: true })
+    expect(transport.requests.map((request) => request.path)).toStrictEqual([
+      "/oauth/device/code",
+      "/oauth/token",
+      "/public/v1/me",
+    ])
+  })
+})
+
 describe("production runtime Command entry E2E", () => {
   it("wires status, pending, both GET selectors, pending resume, and final cleanup through runCli", async () => {
     let serverStatus: "pending" | "succeeded" = "pending"
@@ -336,7 +459,7 @@ describe("production runtime Command entry E2E", () => {
       "--request-id",
       "runtime_status_request",
     ])
-    expect(status.exitCode).toBe(0)
+    expect(status.exitCode).toBe(4)
     expect(status.envelope).toMatchObject({
       ok: true,
       data: { command: { status: "pending", isFinal: false } },
@@ -382,7 +505,7 @@ describe("production runtime Command entry E2E", () => {
       "--command-id",
       COMMAND_ID,
     ])
-    expect(byId.exitCode).toBe(0)
+    expect(byId.exitCode).toBe(4)
     expect(harness.transport.requests.slice(beforeById)).toStrictEqual([
       expectedCommandGetRequest(`/public/v1/commands/${COMMAND_ID}`),
     ])
@@ -394,7 +517,7 @@ describe("production runtime Command entry E2E", () => {
       "--idempotency-key",
       KEY,
     ])
-    expect(byKey.exitCode).toBe(0)
+    expect(byKey.exitCode).toBe(4)
     expect(harness.transport.requests.slice(beforeByKey)).toStrictEqual([
       expectedCommandGetRequest(`/public/v1/commands?idempotencyKey=${KEY}`),
     ])
@@ -408,7 +531,7 @@ describe("production runtime Command entry E2E", () => {
       "--request-id",
       "runtime_resume_request",
     ])
-    expect(resumed.exitCode).toBe(0)
+    expect(resumed.exitCode).toBe(4)
     expect(harness.transport.requests.slice(beforeResume)).toStrictEqual([
       expectedCommandGetRequest(
         `/public/v1/commands/${COMMAND_ID}`,
@@ -515,7 +638,7 @@ describe("production runtime Command entry E2E", () => {
       "--request-id",
       "runtime_loss_resume_request",
     ])
-    expect(resumed.exitCode).toBe(0)
+    expect(resumed.exitCode).toBe(4)
     expect(transportCallIndex).toBe(3)
     expect(harness.transport.requests).toStrictEqual(expectedRequests)
     expect(await harness.runtime.pendingRepository.read(KEY)).toMatchObject({
@@ -625,7 +748,7 @@ describe("production runtime Command entry E2E", () => {
     expect(harness.transport.requests).toHaveLength(1)
 
     releasePost.resolve()
-    expect((await first).exitCode).toBe(0)
+    expect((await first).exitCode).toBe(4)
     expect(harness.transport.requests).toStrictEqual([expectedStatusRequest()])
   })
 

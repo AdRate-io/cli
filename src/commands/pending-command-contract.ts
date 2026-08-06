@@ -7,7 +7,7 @@ import {
   TEST_MACHINE_ORIGIN,
 } from "../constants.js"
 import {
-  hasExactKeys,
+  hasKeys,
   isCanonicalUtcIso,
   isPlainObject,
   isSafeIntegerInRange,
@@ -164,7 +164,7 @@ export function createPreparedPendingCommand(
 function parseIntent(value: unknown): PendingCommandIntent | null {
   if (
     !isPlainObject(value) ||
-    !hasExactKeys(value, ["advId", "campaignId", "desiredStatus", "authId"]) ||
+    !hasKeys(value, ["advId", "campaignId", "desiredStatus", "authId"]) ||
     !isTransportableResourceId(value.advId, "advId") ||
     !isTransportableResourceId(value.campaignId, "campaignId") ||
     (value.desiredStatus !== "ENABLE" && value.desiredStatus !== "DISABLE") ||
@@ -189,7 +189,7 @@ function parseLastResponse(
   if (value === null) return null
   if (
     !isPlainObject(value) ||
-    !hasExactKeys(value, ["requestId", "httpStatus", "errorCode"]) ||
+    !hasKeys(value, ["requestId", "httpStatus", "errorCode"]) ||
     !(
       value.requestId === null ||
       (typeof value.requestId === "string" &&
@@ -219,7 +219,7 @@ export function parsePendingCommandRecord(
 ): PendingCommandRecord | null {
   if (
     !isPlainObject(value) ||
-    !hasExactKeys(value, [
+    !hasKeys(value, [
       "formatVersion",
       "idempotencyKey",
       "capabilityId",

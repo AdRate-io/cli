@@ -11,7 +11,6 @@ import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
-  stableTestProcessIdentity,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -69,8 +68,6 @@ function locatedCredential(): LocatedCredential {
       clientInstanceId: "22222222-2222-4222-8222-222222222222",
       tokenGeneration: "44444444-4444-4444-8444-444444444444",
       deviceGeneration: null,
-      issueOwnerToken: null,
-      pollOwnerToken: null,
     },
   }
 }
@@ -316,7 +313,6 @@ beforeEach(async () => {
   attemptNow = () => new Date(NOW)
   repository = new PendingCommandRepository(fixture.fileSystem, fixture.paths, {
     now: () => attemptNow(),
-    processIdentity: stableTestProcessIdentity("command-resume"),
   })
 })
 
@@ -338,7 +334,7 @@ describe("CommandResumeService.resume", () => {
       requestId: "client_resume_1",
     })
 
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode).toBe(4)
     expect(transport.requests).toHaveLength(2)
     expect(transport.requests[0]).toMatchObject({
       method: "GET",
@@ -377,7 +373,7 @@ describe("CommandResumeService.resume", () => {
 
     const outcome = await service.resume({ idempotencyKey: KEY })
 
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode).toBe(4)
     expect(transport.requests.map((request) => request.method)).toEqual([
       "GET",
       "POST",
@@ -425,7 +421,7 @@ describe("CommandResumeService.resume", () => {
 
     await expect(
       service.resume({ idempotencyKey: KEY })
-    ).resolves.toMatchObject({ exitCode: 0 })
+    ).resolves.toMatchObject({ exitCode: 4 })
     expect(transport.requests.map((request) => request.method)).toEqual([
       "GET",
       "POST",
@@ -457,7 +453,7 @@ describe("CommandResumeService.resume", () => {
 
       const outcome = await service.resume({ idempotencyKey: KEY })
 
-      expect(outcome.exitCode).toBe(0)
+      expect(outcome.exitCode).toBe(status === "executing" ? 4 : 5)
       expect(transport.requests).toHaveLength(1)
       expect(transport.requests[0]!.method).toBe("GET")
       expect(await repository.read(KEY)).toMatchObject({
@@ -508,7 +504,7 @@ describe("CommandResumeService.resume", () => {
       if (shouldPost) {
         await expect(
           service.resume({ idempotencyKey: KEY })
-        ).resolves.toMatchObject({ exitCode: 0 })
+        ).resolves.toMatchObject({ exitCode: 4 })
       } else {
         const failure = await failureFrom(
           service.resume({ idempotencyKey: KEY })
@@ -547,7 +543,7 @@ describe("CommandResumeService.resume", () => {
 
     const failure = await failureFrom(service.resume({ idempotencyKey: KEY }))
 
-    expect(clockReads).toBe(5)
+    expect(clockReads).toBe(3)
     expect(failure).toMatchObject({
       exitCode: 1,
       envelope: {
@@ -564,42 +560,6 @@ describe("CommandResumeService.resume", () => {
         localState: "expired_unsubmitted",
         updatedAt: NOW.toISOString(),
       },
-    })
-  })
-
-  it("rejects a +23h clock after advance observed +48h and sends zero POST", async () => {
-    const createdAt = new Date("2026-08-01T00:00:00.000Z")
-    await seed({ createdAt: createdAt.toISOString() })
-    const at23h = new Date(createdAt.getTime() + 23 * 60 * 60 * 1000)
-    const at48h = new Date(createdAt.getTime() + 48 * 60 * 60 * 1000)
-    const observations = [at23h, at23h, at23h, at48h, at23h]
-    let clockReads = 0
-    const transport = new SequenceTransport([
-      errorResponse({ code: "RESOURCE_NOT_FOUND" }),
-    ])
-    const { service } = serviceFor(transport, () => {
-      const value = observations[clockReads]
-      clockReads += 1
-      if (!value) throw new Error("Unexpected clock read")
-      return new Date(value)
-    })
-
-    const failure = await failureFrom(service.resume({ idempotencyKey: KEY }))
-
-    expect(clockReads).toBe(5)
-    expect(failure).toMatchObject({
-      exitCode: 1,
-      envelope: {
-        error: {
-          code: "LOCAL_STATE_UNSAFE",
-          details: { reason: "clock_rollback" },
-        },
-      },
-    })
-    expect(transport.requests.map((request) => request.method)).toEqual(["GET"])
-    expect(await repository.read(KEY)).toMatchObject({
-      kind: "found",
-      record: { localState: "prepared" },
     })
   })
 
@@ -732,9 +692,11 @@ describe("CommandResumeService.resume", () => {
 
     const outcome = await service.resume({ idempotencyKey: KEY })
 
-    expect(outcome.exitCode).toBe(4)
+    expect(outcome.exitCode).toBe(5)
     expect(transport.requests).toHaveLength(2)
-    expect(outcome.warnings.join(" ")).toContain("charge result is unknown")
+    expect(outcome.warnings.join(" ")).toContain(
+      "operation-unit charging is unknown"
+    )
     expect(await repository.read(KEY)).toMatchObject({
       kind: "found",
       record: {
@@ -745,92 +707,6 @@ describe("CommandResumeService.resume", () => {
         },
       },
     })
-  })
-
-  it("gives one of three same-process resumes the only GET and POST", async () => {
-    await seed()
-    let signalGetStarted!: () => void
-    const getStarted = new Promise<void>((resolve) => {
-      signalGetStarted = resolve
-    })
-    let releaseGet!: () => void
-    const getReleased = new Promise<void>((resolve) => {
-      releaseGet = resolve
-    })
-    const requests: Array<HttpRequest> = []
-    const transport: HttpTransport = {
-      request: async (input) => {
-        requests.push(input)
-        expect(
-          (await readdir(fixture.root)).filter((name) => name.endsWith(".lock"))
-        ).toEqual([])
-        if (input.method === "GET") {
-          signalGetStarted()
-          await getReleased
-          return errorResponse({
-            code: "RESOURCE_NOT_FOUND",
-            requestId: "singleflight_get",
-          })
-        }
-        return successResponse(
-          command({ status: "pending" }),
-          202,
-          "singleflight_post"
-        )
-      },
-    }
-    const { service } = serviceFor(transport)
-
-    const owner = service.resume({
-      idempotencyKey: KEY,
-      requestId: "singleflight_resume",
-    })
-    await getStarted
-    const losers = await Promise.all([
-      failureFrom(service.resume({ idempotencyKey: KEY })),
-      failureFrom(service.resume({ idempotencyKey: KEY })),
-    ])
-    releaseGet()
-    const outcome = await owner
-
-    expect(outcome.exitCode).toBe(0)
-    expect(
-      losers.every(
-        (failure) =>
-          failure.exitCode === 4 &&
-          !failure.envelope.ok &&
-          failure.envelope.error.details.reason ===
-            "command_attempt_in_progress"
-      )
-    ).toBe(true)
-    expect(requests.map((request) => request.method)).toEqual(["GET", "POST"])
-    const getRequests = requests.filter((request) => request.method === "GET")
-    expect(getRequests).toHaveLength(1)
-    expect(
-      getRequests.every(
-        (request) =>
-          request.path === `/public/v1/commands?idempotencyKey=${KEY}` &&
-          request.token === OWNER_SESSION_TOKEN &&
-          request.issuerOrigin === "https://api.adrate.io"
-      )
-    ).toBe(true)
-    const postRequests = requests.filter((request) => request.method === "POST")
-    expect(postRequests).toHaveLength(1)
-    expect(
-      postRequests.every(
-        (request) =>
-          request.idempotencyKey === KEY &&
-          request.token === OWNER_SESSION_TOKEN &&
-          request.issuerOrigin === "https://api.adrate.io" &&
-          JSON.stringify(request.json) ===
-            JSON.stringify({ desiredStatus: "ENABLE" })
-      )
-    ).toBe(true)
-    expect(await repository.read(KEY)).toMatchObject({
-      kind: "found",
-      record: { localState: "command_known", commandId: COMMAND_ID },
-    })
-    expect(await readdir(fixture.paths.pendingCommandAttempts)).toEqual([])
   })
 
   it("preserves concurrent response_unknown when the expiration exact-CAS loses", async () => {

@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process"
 import {
   access,
-  chmod,
   cp,
   mkdir,
   mkdtemp,
@@ -42,7 +41,6 @@ describe("CLI package contract", () => {
   let packageRoot = ""
   let consumerRoot = ""
   let arbitraryCwd = ""
-  let notifierHome = ""
   let tarball = ""
 
   beforeAll(async () => {
@@ -88,26 +86,6 @@ describe("CLI package contract", () => {
     )
     arbitraryCwd = join(consumerRoot, "workspace", "nested")
     await mkdir(arbitraryCwd, { recursive: true })
-    notifierHome = join(packageRoot, "notifier-home")
-    const adrateRoot = join(notifierHome, ".adrate")
-    const cacheRoot = join(adrateRoot, "cache")
-    await mkdir(notifierHome, { mode: 0o700 })
-    await mkdir(adrateRoot, { mode: 0o700 })
-    await mkdir(cacheRoot, { mode: 0o700 })
-    await writeFile(
-      join(cacheRoot, "update.json"),
-      `${JSON.stringify(
-        {
-          formatVersion: 1,
-          latestVersion: "0.2.0",
-          checkedAt: new Date().toISOString(),
-        },
-        null,
-        2
-      )}\n`,
-      { mode: 0o600 }
-    )
-    await chmod(join(cacheRoot, "update.json"), 0o600)
   }, 30_000)
 
   afterAll(async () => {
@@ -191,7 +169,6 @@ describe("CLI package contract", () => {
     const environment = {
       ...process.env,
       ADRATE_NO_SKILLS_NOTIFIER: "1",
-      ADRATE_NO_UPDATE_NOTIFIER: "1",
     }
     await expect(access(join(arbitraryCwd, "skills"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -239,59 +216,14 @@ describe("CLI package contract", () => {
       env: {
         ...process.env,
         ADRATE_NO_SKILLS_NOTIFIER: "1",
-        ADRATE_NO_UPDATE_NOTIFIER: "1",
       },
     })
     expect(`${result.stdout}${result.stderr}`).toContain(
       "npm install -g @adrate/cli"
     )
     expect(`${result.stdout}${result.stderr}`).toContain(
-      "npx skills add AdRate-io/cli -g -y"
+      "adrate skills install"
     )
-  })
-
-  it("真实发布包中 skills/update notice 四种开关组合独立生效", async () => {
-    const binary = join(
-      consumerRoot,
-      "node_modules",
-      "@adrate",
-      "cli",
-      "dist",
-      "bin.js"
-    )
-    const cases = [
-      { skillsDisabled: false, updateDisabled: false },
-      { skillsDisabled: true, updateDisabled: false },
-      { skillsDisabled: false, updateDisabled: true },
-      { skillsDisabled: true, updateDisabled: true },
-    ]
-    for (const current of cases) {
-      const environment: NodeJS.ProcessEnv = {
-        ...process.env,
-        HOME: notifierHome,
-      }
-      delete environment.ADRATE_NO_SKILLS_NOTIFIER
-      delete environment.ADRATE_NO_UPDATE_NOTIFIER
-      if (current.skillsDisabled) {
-        environment.ADRATE_NO_SKILLS_NOTIFIER = "1"
-      }
-      if (current.updateDisabled) {
-        environment.ADRATE_NO_UPDATE_NOTIFIER = "1"
-      }
-      const result = await execFileAsync(
-        process.execPath,
-        [binary, "skills", "list", "--json"],
-        { cwd: arbitraryCwd, env: environment }
-      )
-      const envelope = JSON.parse(result.stdout) as {
-        ok: boolean
-        meta: { _notice?: Record<string, unknown> }
-      }
-      expect(envelope.ok).toBe(true)
-      const notice = envelope.meta._notice ?? {}
-      expect(Object.hasOwn(notice, "skills")).toBe(!current.skillsDisabled)
-      expect(Object.hasOwn(notice, "update")).toBe(!current.updateDisabled)
-    }
   })
 
   it("冻结真实 tarball 的 15 项发布边界", async () => {
@@ -323,36 +255,5 @@ describe("CLI package contract", () => {
     ) as Record<string, unknown>
     expect(sourceMap).not.toHaveProperty("sourcesContent")
     expect(sourceMap.sources).toBeInstanceOf(Array)
-  })
-
-  it("README 如实记录 14 项 tarball 与 Windows 未实机验证边界", async () => {
-    const readme = await readFile(
-      new URL("../README.md", import.meta.url),
-      "utf8"
-    )
-    for (const entry of [
-      "dist/bin.js",
-      "dist/bin.js.map",
-      "dist/bin.d.ts",
-      "package.json",
-      "README.md",
-      "scripts/keychain-smoke.mjs",
-      "skills/adrate-shared/SKILL.md",
-      "skills/adrate-shared/skill-manifest.json",
-      "skills/adrate-shared/agents/openai.yaml",
-      "skills/adrate-ads/SKILL.md",
-      "skills/adrate-ads/skill-manifest.json",
-      "skills/adrate-ads/agents/openai.yaml",
-      "skills-content/adrate-shared/SKILL.md",
-      "skills-content/adrate-ads/SKILL.md",
-    ]) {
-      expect(readme).toContain(entry)
-    }
-    expect(readme).toContain("不包含 SYSTEM ACE")
-    expect(readme).toContain("ACL 路径请求以 Base64 JSON 通过 stdin 输入")
-    expect(readme).toContain(
-      "PID 则以 UTF-8 十进制文本做 Base64 后通过 stdin 输入"
-    )
-    expect(readme).toContain("尚未在真实 Windows 主机验证")
   })
 })

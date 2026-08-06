@@ -15,15 +15,11 @@ export function isPlainObject(
   return prototype === Object.prototype || prototype === null
 }
 
-export function hasExactKeys(
+export function hasKeys(
   value: Record<string, unknown>,
-  expected: ReadonlyArray<string>
+  required: ReadonlyArray<string>
 ): boolean {
-  const keys = Object.keys(value).sort()
-  return (
-    keys.length === expected.length &&
-    [...expected].sort().every((key, index) => keys[index] === key)
-  )
+  return required.every((key) => key in value)
 }
 
 export function isSafeIntegerInRange(

@@ -112,16 +112,6 @@ describe("auth remediation environment", () => {
         config: { value: validConfig(), damaged: false },
       }),
       evidence({
-        device: { value: validDeviceState(), damaged: false },
-        pollAttempt: {
-          value: validDevicePollAttempt({
-            environment: "test",
-            issuerOrigin: "https://api.test.adrate.io",
-          }),
-          damaged: false,
-        },
-      }),
-      evidence({
         fallbackExists: true,
         config: { value: validConfig(), damaged: false },
       }),
@@ -145,24 +135,6 @@ describe("auth remediation environment", () => {
         pollAttempt: {
           value: validDevicePollAttempt({
             deviceGeneration: "77777777-7777-4777-8777-777777777777",
-          }),
-          damaged: false,
-        },
-      }),
-      evidence({
-        device: { value: validDeviceState(), damaged: false },
-        pollAttempt: {
-          value: validDevicePollAttempt({
-            clientInstanceId: "88888888-8888-4888-8888-888888888888",
-          }),
-          damaged: false,
-        },
-      }),
-      evidence({
-        device: { value: validDeviceState(), damaged: false },
-        pollAttempt: {
-          value: validDevicePollAttempt({
-            issuerOrigin: "https://api.test.adrate.io",
           }),
           damaged: false,
         },

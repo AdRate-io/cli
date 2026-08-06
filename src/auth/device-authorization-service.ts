@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto"
 import {
   CLIENT_ID,
   DEADLINES_MS,
-  DEVICE_DELIVERY_SAFETY_WINDOW_MS,
   DEVICE_GRANT_TYPE,
-  DEVICE_TRANSACTION_LEASE_MS,
   EXIT_CODE,
   M0_CAPABILITIES,
   M0_SCOPE,
@@ -30,11 +28,11 @@ import { classifyOAuthPollResponse } from "./oauth-response-classifier.js"
 import type { ValidatedAuthLoginInput } from "./auth-command-support.js"
 import type { AuthContext } from "./auth-context.js"
 import type {
-  DevicePollAcknowledgedRecovery,
   DevicePollCoordinator,
   FrozenDevicePoll,
 } from "./device-poll-coordinator.js"
 import type { SessionIdentityService } from "./session-identity-service.js"
+import type { LogoutRecoveryService } from "./logout-recovery-service.js"
 import type { CliEnvironment } from "../constants.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { CliOutcome } from "../errors.js"
@@ -42,63 +40,78 @@ import type { GlobalOptions } from "../parser.js"
 import type {
   DeviceAuthorizationState,
   DeviceIssueReservation,
-  DevicePollAcknowledgedResponseKind,
 } from "../storage/schemas.js"
 
-function acknowledgedResponseKind(
-  oauthError: string | null
-): DevicePollAcknowledgedResponseKind {
-  return oauthError === "authorization_pending" ||
-    oauthError === "slow_down" ||
-    oauthError === "temporarily_unavailable"
-    ? oauthError
-    : "oauth_error"
-}
-
-interface DeviceResumeResult {
-  outcome: CliOutcome
-  recoveredResponse: boolean
-}
-
-/** 只负责 Device 发码、poll 调度、一次性交付和 Token storage commit。 */
+/** 只负责 Device 发码、poll 调度和 Token 持久化。 */
 export class DeviceAuthorizationService {
   constructor(
     private readonly context: AuthContext,
     private readonly devicePoll: DevicePollCoordinator,
-    private readonly identity: SessionIdentityService
+    private readonly identity: SessionIdentityService,
+    private readonly logoutRecovery: LogoutRecoveryService
   ) {}
 
   async login(
     input: ValidatedAuthLoginInput,
-    recoveredAcknowledgement: DevicePollAcknowledgedRecovery | null = null
+    emitDeviceCodeLine?: (line: string) => void
   ): Promise<CliOutcome> {
-    const deviceName = input.deviceName
-    if (recoveredAcknowledgement !== null) {
-      return this.recoveredAcknowledgementOutcome(recoveredAcknowledgement)
+    if (input.device && !emitDeviceCodeLine) {
+      throw dependencyFailure(
+        "The Device Authorization output stream is unavailable."
+      )
+    }
+    if (!input.global.test) await this.devicePoll.normalizeForLogin()
+    if (!input.global.test) {
+      const normalization = await this.normalizeCredentialState(input.global)
+      if (normalization !== null) return normalization
     }
     if (input.noWait) {
       return this.issueDeviceAuthorization({
         global: input.global,
-        deviceName,
+        deviceName: input.deviceName,
       })
     }
     if (input.resume) {
-      return (
-        await this.resumeDeviceAuthorizationWithRecoverySignal(input.global)
-      ).outcome
+      return (await this.resumeDeviceAuthorization(input.global)).outcome
     }
 
     let state = await this.context.local.state.readDeviceState()
     if (input.global.test || input.deviceNameProvided || !state) {
       const issued = await this.issueDeviceAuthorization({
         global: input.global,
-        deviceName,
+        deviceName: input.deviceName,
       })
       if (!issued.envelope.ok) return issued
-      this.context.progress(
-        `Open ${String(issued.envelope.data.verificationUriComplete)} and approve code ${String(issued.envelope.data.userCode)}.`
-      )
+      if (input.device) {
+        this.emitDeviceCodeLine(issued.envelope.data, emitDeviceCodeLine)
+      } else {
+        this.context.progress(
+          `Open ${String(issued.envelope.data.verificationUriComplete)} and approve code ${String(issued.envelope.data.userCode)}.`
+        )
+      }
       state = await this.context.local.state.readDeviceState()
+    } else if (input.device) {
+      const expiresMs = new Date(state.expiresAt).getTime()
+      if (expiresMs <= this.context.now().getTime()) {
+        await this.context.local.state.clearDeviceState()
+        const issued = await this.issueDeviceAuthorization({
+          global: input.global,
+          deviceName: input.deviceName,
+        })
+        if (!issued.envelope.ok) return issued
+        this.emitDeviceCodeLine(issued.envelope.data, emitDeviceCodeLine)
+        state = await this.context.local.state.readDeviceState()
+      } else {
+        this.emitDeviceCodeLine(
+          {
+            verificationUriComplete: state.verificationUriComplete,
+            verificationUri: state.verificationUri,
+            userCode: state.userCode,
+            expiresAt: state.expiresAt,
+          },
+          emitDeviceCodeLine
+        )
+      }
     }
     while (state) {
       const wait = Math.max(
@@ -106,11 +119,8 @@ export class DeviceAuthorizationService {
         new Date(state.nextPollAt).getTime() - this.context.now().getTime()
       )
       if (wait > 0) await this.context.sleep(wait)
-      const resumed = await this.resumeDeviceAuthorizationWithRecoverySignal(
-        input.global
-      )
+      const resumed = await this.resumeDeviceAuthorization(input.global)
       const outcome = resumed.outcome
-      if (resumed.recoveredResponse) return outcome
       if (
         !outcome.envelope.ok &&
         (outcome.envelope.error.details.oauthError ===
@@ -125,6 +135,82 @@ export class DeviceAuthorizationService {
     throw authenticationFailure("The Device Authorization state expired.")
   }
 
+  /**
+   * Accio device-code 输出：一行顶层 JSON，包含框架 stdout 解析所需的四个键。
+   * 只在 --device 模式下调用，不影响 envelope 或现有命令的 stdout 形态。
+   */
+  private emitDeviceCodeLine(
+    data: Record<string, unknown>,
+    emit: ((line: string) => void) | undefined
+  ): void {
+    if (!emit) {
+      throw dependencyFailure(
+        "The Device Authorization output stream is unavailable."
+      )
+    }
+    const line = JSON.stringify({
+      verificationUriComplete: data.verificationUriComplete,
+      verificationUri: data.verificationUri,
+      userCode: data.userCode,
+      expiresIn: this.computeExpiresInSeconds(data.expiresAt),
+    })
+    emit(line)
+  }
+
+  private computeExpiresInSeconds(expiresAt: unknown): number {
+    if (typeof expiresAt !== "string") return 600
+    const remainingMs =
+      new Date(expiresAt).getTime() - this.context.now().getTime()
+    return Math.max(1, Math.ceil(remainingMs / 1000))
+  }
+
+  /**
+   * 登录前凭据归一化：检测并处理残留状态，使 login 可以正常发码。
+   *
+   * 两种残留特征：
+   * 1. credentials.json 缺失但已激活 Token 存在（Accio 断连）
+   * 2. credentials.json 记录的 absoluteExpiresAt 已到期
+   *
+   * 归一化会尝试远端 logout，**只有拿到精确 revoked 成功体或
+   * INVALID_CREDENTIAL / CREDENTIAL_EXPIRED / USER_DISABLED 才清理本地凭据**；
+   * transport 失败、401/403、未知业务码一律保留凭据、返回 unknown
+   * 并退出 5。正常有效凭据不属于归一化对象，仍由发码守卫拒绝重复登录。
+   */
+  private async normalizeCredentialState(
+    global: GlobalOptions
+  ): Promise<CliOutcome | null> {
+    const inspection = await this.context.local.inspectAndRecover()
+
+    if (inspection.state === "none" || inspection.state === "device_only") {
+      return null
+    }
+
+    if (inspection.state === "local_incomplete") {
+      if (inspection.reason === "token_missing") {
+        return this.logoutRecovery.logoutInspected(global, inspection)
+      }
+      return null
+    }
+
+    // Token 刚落 Keychain 但 /me 未激活时也没有 credentials.json。
+    // device=token_received 是该可恢复路径的唯一区分信号，不能当作 Accio 断连。
+    const disconnected =
+      inspection.credentials === null &&
+      inspection.device?.localState !== "token_received"
+    const absoluteExpiresAt = inspection.credentials?.absoluteExpiresAt
+    const expired =
+      absoluteExpiresAt !== undefined &&
+      Date.parse(absoluteExpiresAt) <= this.context.now().getTime()
+
+    if (!disconnected && !expired) return null
+
+    const logout = await this.logoutRecovery.logoutInspected(global, inspection)
+    if (logout.exitCode !== EXIT_CODE.success) {
+      return logout
+    }
+    return null
+  }
+
   private async issueDeviceAuthorization(input: {
     global: GlobalOptions
     deviceName: string | null
@@ -132,7 +218,7 @@ export class DeviceAuthorizationService {
     const environment: CliEnvironment = input.global.test
       ? "test"
       : "production"
-    const ownerToken = randomUUID()
+    const generation = randomUUID()
     const deviceName = input.deviceName
     const reservation = await this.context.local.state.withAuthLock(
       async () => {
@@ -143,28 +229,20 @@ export class DeviceAuthorizationService {
           )
         }
         if (snapshot.issueReservation) {
-          const createdAt = new Date(
-            snapshot.issueReservation.createdAt
-          ).getTime()
-          const age = this.context.now().getTime() - createdAt
-          if (age < 0 || age < DEVICE_TRANSACTION_LEASE_MS) {
+          if (snapshot.device) {
+            await this.context.local.state.clearDeviceIssueReservation()
+            snapshot = await this.context.local.readLocalSnapshotLocked()
+          } else {
             throw usageFailure(
               "Another Device Authorization request is already in progress."
             )
           }
-          await this.context.local.state.clearDeviceIssueReservation()
-          snapshot = await this.context.local.readLocalSnapshotLocked()
-        }
-        if (!snapshot.index) {
-          snapshot =
-            await this.context.local.settleTerminalDeviceLocked(snapshot)
         }
         if (
           snapshot.index ||
           snapshot.metadata ||
           snapshot.fallbackExists ||
           snapshot.pollAttempt ||
-          snapshot.cleanupReservation ||
           snapshot.device?.localState === "token_received"
         ) {
           throw usageFailure(
@@ -177,45 +255,22 @@ export class DeviceAuthorizationService {
               "--test requires no existing Device Authorization or credential state."
             )
           }
-          const device = snapshot.device
           const nowMs = this.context.now().getTime()
-          const expiresAt = new Date(device.expiresAt).getTime()
-          const attemptedAt = device.deliveryVerificationAttemptedAt
-            ? new Date(device.deliveryVerificationAttemptedAt).getTime()
-            : null
-          const safeRestartAt =
-            attemptedAt === null
-              ? expiresAt
-              : Math.max(
-                  expiresAt,
-                  attemptedAt + DEVICE_DELIVERY_SAFETY_WINDOW_MS
-                )
-          if (nowMs < safeRestartAt) {
+          if (nowMs < new Date(snapshot.device.expiresAt).getTime()) {
             throw usageFailure(
               "An active Device Authorization already exists. Use auth login --resume."
             )
           }
           await this.context.local.state.clearDeviceState()
-          if (device.localState === "delivery_unknown") {
-            throw authenticationFailure(
-              "The previous one-time Token delivery fence reached its safe restart boundary and was cleared. Start a new Device Authorization with a new auth login --no-wait invocation.",
-              "CREDENTIAL_EXPIRED",
-              {
-                deliveryState: "safe_restart_cleared",
-                safeRestartAt: new Date(safeRestartAt).toISOString(),
-              }
-            )
-          }
         }
         const config = await this.context.local.state.ensureConfig(environment)
         const value: DeviceIssueReservation = {
           formatVersion: 1,
-          ownerToken,
+          generation,
           environment,
           issuerOrigin: config.issuerOrigin,
           clientInstanceId: config.clientInstanceId,
           deviceName,
-          createdAt: this.context.now().toISOString(),
         }
         await this.context.local.state.writeDeviceIssueReservation(value)
         return value
@@ -224,7 +279,6 @@ export class DeviceAuthorizationService {
 
     let finalized = false
     try {
-      // 已有 Device/Token 的准入拒绝必须发生在 Keychain/fallback 探测前。
       await this.context.local.preflightCredentialStorage()
       const form = new URLSearchParams({
         client_id: CLIENT_ID,
@@ -273,7 +327,7 @@ export class DeviceAuthorizationService {
       const expiresAt = addSeconds(receivedAt, decoded.expiresIn)
       const state: DeviceAuthorizationState = {
         formatVersion: 1,
-        generation: randomUUID(),
+        generation: reservation.generation,
         localState: "issued",
         clientId: CLIENT_ID,
         clientInstanceId: reservation.clientInstanceId,
@@ -289,15 +343,13 @@ export class DeviceAuthorizationService {
         intervalSeconds: decoded.interval,
         createdAt: receivedAt,
         nextPollAt: addSeconds(receivedAt, decoded.interval),
-        deliveryVerificationAttemptedAt: null,
-        terminalEvidence: null,
       }
       await this.context.local.state.withAuthLock(async () => {
         const current =
           await this.context.local.state.readDeviceIssueReservation()
         if (
           !current ||
-          current.ownerToken !== reservation.ownerToken ||
+          current.generation !== reservation.generation ||
           current.issuerOrigin !== reservation.issuerOrigin ||
           current.clientInstanceId !== reservation.clientInstanceId
         ) {
@@ -311,8 +363,7 @@ export class DeviceAuthorizationService {
           snapshot.metadata ||
           snapshot.fallbackExists ||
           snapshot.device ||
-          snapshot.pollAttempt ||
-          snapshot.cleanupReservation
+          snapshot.pollAttempt
         ) {
           throw usageFailure(
             "Local authentication state changed while Device Authorization was being issued."
@@ -340,20 +391,18 @@ export class DeviceAuthorizationService {
         ],
       }
     } finally {
-      if (!finalized) await this.releaseIssueReservation(ownerToken)
+      if (!finalized) await this.releaseIssueReservation(generation)
     }
   }
 
-  private async resumeDeviceAuthorizationWithRecoverySignal(
+  private async resumeDeviceAuthorization(
     global: GlobalOptions
-  ): Promise<DeviceResumeResult> {
+  ): Promise<{ outcome: CliOutcome }> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const preparation = await this.devicePoll.prepare()
       if (preparation.kind === "reinspect") {
         const recovered = await this.context.local.inspectAndRecover()
         if (recovered.state === "device_only" || recovered.state === "none") {
-          // index 可能在 prepare 释放锁后被另一进程收敛。重新走
-          // prepare 才能让 delivery tombstone 返回 exit 5，不能误报用法错误。
           continue
         }
         if (recovered.state !== "located") {
@@ -377,7 +426,6 @@ export class DeviceAuthorizationService {
             warning === null
               ? outcome
               : { ...outcome, warnings: [warning, ...outcome.warnings] },
-          recoveredResponse: false,
         }
       }
       if (preparation.kind === "wait") {
@@ -387,77 +435,15 @@ export class DeviceAuthorizationService {
             "authorization_pending",
             preparation.retryAfterSeconds
           ),
-          recoveredResponse: false,
         }
-      }
-      if (preparation.kind === "recovered_response") {
-        return {
-          outcome: this.recoveredAcknowledgementOutcome({
-            kind: "response",
-            responseKind: preparation.responseKind,
-            retryAfterSeconds: preparation.retryAfterSeconds,
-          }),
-          recoveredResponse: true,
-        }
-      }
-      if (preparation.kind === "recovered_unknown") {
-        throw outcomeUnknownFailure(
-          "A previous Device Token request may have been dispatched before the process stopped. The state was fenced as delivery_unknown and was not replayed.",
-          {
-            deliveryState: "delivery_unknown",
-            safeRestartAt: preparation.safeRestartAt,
-          }
-        )
       }
       const frozen = await this.devicePoll.freezeBackend(preparation)
-      const dispatched = await this.devicePoll.markDispatchIntent(frozen)
       return {
-        outcome: await this.pollToken(dispatched, global),
-        recoveredResponse: false,
+        outcome: await this.pollToken(frozen, global),
       }
     }
     throw dependencyFailure(
       "Local authentication state changed repeatedly while authorization was resuming."
-    )
-  }
-
-  private recoveredAcknowledgementOutcome(
-    recovery: DevicePollAcknowledgedRecovery
-  ): CliOutcome {
-    if (recovery.kind === "delivery_unknown") {
-      throw outcomeUnknownFailure(
-        "A previous Device Token request may have been dispatched before the process stopped. The state was fenced as delivery_unknown and was not replayed.",
-        {
-          deliveryState: "delivery_unknown",
-          safeRestartAt: recovery.safeRestartAt,
-        }
-      )
-    }
-    if (
-      recovery.responseKind === "authorization_pending" ||
-      recovery.responseKind === "slow_down"
-    ) {
-      return oauthWaitOutcome(
-        localRequestId(),
-        recovery.responseKind,
-        recovery.retryAfterSeconds
-      )
-    }
-    if (recovery.responseKind === "temporarily_unavailable") {
-      throw dependencyFailure(
-        "The authorization service is temporarily unavailable.",
-        EXIT_CODE.retryable,
-        {
-          retryAfterSeconds: recovery.retryAfterSeconds,
-          oauthError: "temporarily_unavailable",
-          suggestedAction: "retry_after",
-        }
-      )
-    }
-    throw dependencyFailure(
-      "The authorization server rejected the Token request.",
-      EXIT_CODE.business,
-      { responseKind: "oauth_error" }
     )
   }
 
@@ -466,7 +452,6 @@ export class DeviceAuthorizationService {
     global: GlobalOptions
   ): Promise<CliOutcome> {
     const device = poll.device
-    const deliveryVerification = poll.attempt.deliveryVerification
     const form = new URLSearchParams({
       grant_type: DEVICE_GRANT_TYPE,
       device_code: device.deviceCode!,
@@ -483,16 +468,10 @@ export class DeviceAuthorizationService {
         form,
       })
     } catch (error) {
-      this.assertPollCompletion(
-        await this.devicePoll.completeDeliveryUnknown(
-          poll,
-          this.context.now().toISOString()
-        )
-      )
+      await this.devicePoll.abandonUnknown(poll)
       throw outcomeUnknownFailure(
-        "The Device Token exchange outcome is unknown. Do not blindly retry the original exchange.",
+        "The Device Token exchange outcome is unknown. Run auth login again to start a new Device Authorization.",
         {
-          deliveryState: "delivery_unknown",
           failureKind:
             error instanceof HttpTransportError ? error.kind : "network",
         }
@@ -503,7 +482,6 @@ export class DeviceAuthorizationService {
       response,
       receivedAt,
       protocolIntervalSeconds: device.intervalSeconds,
-      deliveryVerification,
     })
     if (classification.kind === "token") {
       const persisted = await this.context.local.persistToken({
@@ -531,54 +509,30 @@ export class DeviceAuthorizationService {
       }
     }
     if (classification.kind === "delivery_unknown") {
-      this.assertPollCompletion(
-        await this.devicePoll.completeDeliveryUnknown(poll, receivedAt)
-      )
+      await this.devicePoll.abandonUnknown(poll)
       throw outcomeUnknownFailure(
         classification.responseKind === "invalid_success"
-          ? "The Device Token response was invalid; delivery may have occurred."
-          : "The Device Token server returned a non-JSON failure; delivery is unknown.",
-        { deliveryState: "delivery_unknown" }
+          ? "The Device Token response was invalid. Run auth login again to start a new Device Authorization."
+          : "The Device Token server returned a non-JSON failure. Run auth login again to start a new Device Authorization."
       )
     }
     if (classification.kind === "terminal") {
-      this.assertPollCompletion(
-        await this.devicePoll.completeTerminal(poll, receivedAt)
-      )
+      this.assertPollCompletion(await this.devicePoll.completeTerminal(poll))
       throw authenticationFailure(
-        deliveryVerification
-          ? "The one-time Device authorization is no longer usable."
-          : classification.oauthError === "access_denied"
-            ? "The Owner denied this Device Authorization."
-            : "The Device Authorization expired or was already consumed."
-      )
-    }
-    if (classification.kind === "verification_unknown") {
-      this.assertPollCompletion(
-        await this.devicePoll.completeAcknowledgedResponse(
-          poll,
-          acknowledgedResponseKind(classification.oauthError),
-          receivedAt,
-          classification.protocolIntervalSeconds,
-          classification.nextPollDelaySeconds,
-          classification.retryAfterSeconds
-        )
-      )
-      throw outcomeUnknownFailure(
-        "The single delivery verification did not recover a Token. No further exchange will be sent before the safety boundary.",
-        {
-          deliveryState: "delivery_unknown",
-          oauthError: classification.oauthError,
-        }
+        classification.oauthError === "access_denied"
+          ? "The Owner denied this Device Authorization."
+          : "The Device Authorization expired or was already consumed."
       )
     }
     if (classification.kind === "pending") {
       this.assertPollCompletion(
-        await this.devicePoll.completeAcknowledgedResponse(
-          poll,
-          "authorization_pending",
-          receivedAt,
-          classification.protocolIntervalSeconds
+        await this.devicePoll.completePollResponse(poll, (current) =>
+          this.devicePoll.applyOAuthSchedule(
+            current,
+            receivedAt,
+            "authorization_pending",
+            classification.protocolIntervalSeconds
+          )
         )
       )
       return oauthWaitOutcome(
@@ -589,13 +543,15 @@ export class DeviceAuthorizationService {
     }
     if (classification.kind === "slow_down") {
       this.assertPollCompletion(
-        await this.devicePoll.completeAcknowledgedResponse(
-          poll,
-          "slow_down",
-          receivedAt,
-          classification.protocolIntervalSeconds,
-          classification.protocolIntervalSeconds,
-          classification.retryAfterSeconds
+        await this.devicePoll.completePollResponse(poll, (current) =>
+          this.devicePoll.applyOAuthSchedule(
+            current,
+            receivedAt,
+            "slow_down",
+            classification.protocolIntervalSeconds,
+            classification.protocolIntervalSeconds,
+            classification.retryAfterSeconds
+          )
         )
       )
       return oauthWaitOutcome(
@@ -606,13 +562,15 @@ export class DeviceAuthorizationService {
     }
     if (classification.kind === "temporarily_unavailable") {
       this.assertPollCompletion(
-        await this.devicePoll.completeAcknowledgedResponse(
-          poll,
-          "temporarily_unavailable",
-          receivedAt,
-          classification.protocolIntervalSeconds,
-          classification.nextPollDelaySeconds,
-          classification.retryAfterSeconds
+        await this.devicePoll.completePollResponse(poll, (current) =>
+          this.devicePoll.applyOAuthSchedule(
+            current,
+            receivedAt,
+            "temporarily_unavailable",
+            classification.protocolIntervalSeconds,
+            classification.nextPollDelaySeconds,
+            classification.retryAfterSeconds
+          )
         )
       )
       throw dependencyFailure(
@@ -627,11 +585,13 @@ export class DeviceAuthorizationService {
     }
     if (classification.kind === "invalid_slow_down") {
       this.assertPollCompletion(
-        await this.devicePoll.completeAcknowledgedResponse(
-          poll,
-          "oauth_error",
-          receivedAt,
-          classification.protocolIntervalSeconds
+        await this.devicePoll.completePollResponse(poll, (current) =>
+          this.devicePoll.applyOAuthSchedule(
+            current,
+            receivedAt,
+            "oauth_error",
+            classification.protocolIntervalSeconds
+          )
         )
       )
       throw dependencyFailure(
@@ -640,11 +600,13 @@ export class DeviceAuthorizationService {
       )
     }
     this.assertPollCompletion(
-      await this.devicePoll.completeAcknowledgedResponse(
-        poll,
-        acknowledgedResponseKind(classification.oauthError),
-        receivedAt,
-        device.intervalSeconds
+      await this.devicePoll.completePollResponse(poll, (current) =>
+        this.devicePoll.applyOAuthSchedule(
+          current,
+          receivedAt,
+          "oauth_error",
+          device.intervalSeconds
+        )
       )
     )
     throw dependencyFailure(
@@ -661,16 +623,16 @@ export class DeviceAuthorizationService {
   private assertPollCompletion(completed: boolean): void {
     if (!completed) {
       throw dependencyFailure(
-        "Device poll ownership changed while the response was being finalized; no current state was modified."
+        "Device poll state changed while the response was being finalized; no current state was modified."
       )
     }
   }
 
-  private async releaseIssueReservation(ownerToken: string): Promise<void> {
+  private async releaseIssueReservation(generation: string): Promise<void> {
     await this.context.local.state.withAuthLock(async () => {
       const current =
         await this.context.local.state.readDeviceIssueReservation()
-      if (current?.ownerToken === ownerToken) {
+      if (current?.generation === generation) {
         await this.context.local.state.clearDeviceIssueReservation()
       }
     })

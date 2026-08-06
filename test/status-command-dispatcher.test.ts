@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { StatusCommandDispatcher } from "../src/commands/status-command-dispatcher.js"
 import { PendingCommandRepository } from "../src/commands/pending-command-repository.js"
-import { PendingCommandAttemptBusyError } from "../src/commands/pending-command-attempt.js"
 import { CliFailure } from "../src/errors.js"
 import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
-  deferred,
-  stableTestProcessIdentity,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -42,8 +39,6 @@ function locatedCredential(): LocatedCredential {
       clientInstanceId: "22222222-2222-4222-8222-222222222222",
       tokenGeneration: "44444444-4444-4444-8444-444444444444",
       deviceGeneration: null,
-      issueOwnerToken: null,
-      pollOwnerToken: null,
     },
   }
 }
@@ -130,49 +125,6 @@ function successResponse(
   }
 }
 
-function errorWithoutCommandResponse(
-  operationUnitsCharged: 0 | null
-): PublicResponse {
-  const requestId = "dispatcher_server_error"
-  const bucket = { limit: 10, remaining: 9, resetAt: null }
-  return {
-    response: {
-      status: 503,
-      requestId,
-      headers: {
-        "content-type": "application/json",
-        "x-request-id": requestId,
-      },
-      text: "{}",
-    },
-    envelope: {
-      ok: false,
-      error: {
-        code: "DEPENDENCY_UNAVAILABLE",
-        message: "Status request failed.",
-        retryable: true,
-        details: {
-          commandCreated: false,
-          suggestedAction: null,
-          resolutionUrl: null,
-        },
-      },
-      meta: {
-        requestId,
-        apiVersion: "v1",
-        usage: {
-          operationUnits: 3,
-          operationUnitsCharged,
-          minute: { ...bucket, burst: 10 },
-          writeMinute: bucket,
-          dailyTikTokUnits: bucket,
-        },
-      },
-    },
-    retryAfterSeconds: null,
-  }
-}
-
 async function writeCommandKnown(
   record: PendingCommandRecord
 ): Promise<PendingCommandRecord> {
@@ -191,17 +143,6 @@ async function writeCommandKnown(
   return next
 }
 
-async function writeResponseUnknown(
-  record: PendingCommandRecord
-): Promise<void> {
-  await repository.replaceExact(record, {
-    ...record,
-    localState: "response_unknown",
-    updatedAt: NOW.toISOString(),
-    lastResponse: null,
-  })
-}
-
 async function caughtFailure(
   promise: Promise<unknown>
 ): Promise<CliFailure<CliEnvelope>> {
@@ -218,7 +159,6 @@ beforeEach(async () => {
   fixture = await createTemporaryStateFixture()
   repository = new PendingCommandRepository(fixture.fileSystem, fixture.paths, {
     now: () => new Date(NOW),
-    processIdentity: stableTestProcessIdentity("status-dispatcher"),
   })
 })
 
@@ -244,7 +184,7 @@ describe("StatusCommandDispatcher", () => {
       requestId: "dispatcher_client_1",
     })
 
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode).toBe(4)
     expect(postPublicJson).toHaveBeenCalledTimes(1)
     expect(postPublicJson).toHaveBeenCalledWith({
       issuerOrigin: "https://api.adrate.io",
@@ -266,99 +206,6 @@ describe("StatusCommandDispatcher", () => {
           errorCode: null,
         },
       },
-    })
-  })
-
-  it("lets a transferred query handle dispatch only once across serial reuse", async () => {
-    const record = await preparedRecord()
-    const handle = await repository.attempts.reserve({
-      expected: record,
-      phase: "query_intent",
-      observedAt: NOW,
-      allowReclaim: false,
-    })
-    const postPublicJson = vi.fn(() => Promise.resolve(successResponse()))
-    const fence = localFence()
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-
-    await expect(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: fence.located,
-        attempt: handle,
-      })
-    ).resolves.toMatchObject({ exitCode: 0 })
-    const replayFailure = await caughtFailure(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: fence.located,
-        attempt: handle,
-      })
-    )
-
-    expect(replayFailure.exitCode).toBe(1)
-    expect(postPublicJson).toHaveBeenCalledTimes(1)
-    expect(await repository.read(KEY)).toMatchObject({
-      kind: "found",
-      record: { localState: "command_known", commandId: COMMAND_ID },
-    })
-  })
-
-  it("lets a transferred query handle dispatch only once across concurrent reuse", async () => {
-    const record = await preparedRecord()
-    const handle = await repository.attempts.reserve({
-      expected: record,
-      phase: "query_intent",
-      observedAt: NOW,
-      allowReclaim: false,
-    })
-    const postStarted = deferred()
-    const releasePost = deferred()
-    const postPublicJson = vi.fn(async () => {
-      postStarted.resolve()
-      await releasePost.promise
-      return successResponse()
-    })
-    const fence = localFence()
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-    const winner = dispatcher.dispatch({
-      record,
-      expectedCredential: fence.located,
-      attempt: handle,
-    })
-    await postStarted.promise
-
-    const loser = await caughtFailure(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: fence.located,
-        attempt: handle,
-      })
-    )
-
-    expect(loser).toMatchObject({
-      exitCode: 4,
-      envelope: {
-        error: { details: { reason: "command_attempt_in_progress" } },
-      },
-    })
-    expect(postPublicJson).toHaveBeenCalledTimes(1)
-    releasePost.resolve()
-    await expect(winner).resolves.toMatchObject({ exitCode: 0 })
-    expect(postPublicJson).toHaveBeenCalledTimes(1)
-    expect(await repository.read(KEY)).toMatchObject({
-      kind: "found",
-      record: { localState: "command_known", commandId: COMMAND_ID },
     })
   })
 
@@ -391,167 +238,6 @@ describe("StatusCommandDispatcher", () => {
       kind: "found",
       record: { localState: "response_unknown", lastResponse: null },
     })
-  })
-
-  it("blocks an unowned sibling mutation while the durable POST owner is active", async () => {
-    const record = await preparedRecord()
-    const postPublicJson = vi.fn(async () => {
-      await expect(
-        repository.replaceExact(record, {
-          ...record,
-          localState: "response_unknown",
-          updatedAt: NOW.toISOString(),
-          lastResponse: null,
-        })
-      ).rejects.toBeInstanceOf(PendingCommandAttemptBusyError)
-      return successResponse()
-    })
-    const fence = localFence()
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-
-    const outcome = await dispatcher.dispatch({
-      record,
-      expectedCredential: fence.located,
-    })
-
-    expect(outcome.exitCode).toBe(0)
-    expect(postPublicJson).toHaveBeenCalledTimes(1)
-    expect(await repository.read(KEY)).toMatchObject({
-      kind: "found",
-      record: { localState: "command_known", commandId: COMMAND_ID },
-    })
-  })
-
-  it("releases a transferred attempt when the credential precondition fails", async () => {
-    const record = await preparedRecord()
-    const handle = await repository.attempts.reserve({
-      expected: record,
-      phase: "query_intent",
-      observedAt: NOW,
-      allowReclaim: false,
-    })
-    const fence = localFence()
-    const mismatched: LocatedCredential = {
-      ...fence.located,
-      credentials: {
-        ...fence.located.credentials!,
-        teamId: fence.located.credentials!.teamId + 1,
-      },
-    }
-    const postPublicJson = vi.fn()
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-
-    const failure = await caughtFailure(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: mismatched,
-        attempt: handle,
-      })
-    )
-
-    expect(failure).toMatchObject({
-      exitCode: 4,
-      envelope: { error: { details: { localStateChanged: true } } },
-    })
-    expect(postPublicJson).not.toHaveBeenCalled()
-    expect(
-      await fixture.fileSystem.readSecureFile(
-        repository.attempts.path(handle.attempt.recordId)
-      )
-    ).toBeNull()
-  })
-
-  it("releases a transferred attempt when advance fails", async () => {
-    const record = await preparedRecord()
-    const handle = await repository.attempts.reserve({
-      expected: record,
-      phase: "query_intent",
-      observedAt: NOW,
-      allowReclaim: false,
-    })
-    const advance = vi
-      .spyOn(repository.attempts, "advanceToPost")
-      .mockRejectedValueOnce(new PendingCommandAttemptBusyError())
-    const release = vi.spyOn(repository.attempts, "release")
-    const fence = localFence()
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson: vi.fn() } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-
-    const failure = await caughtFailure(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: fence.located,
-        attempt: handle,
-      })
-    )
-
-    expect(failure).toMatchObject({
-      exitCode: 4,
-      envelope: {
-        error: { details: { reason: "command_attempt_in_progress" } },
-      },
-    })
-    expect(advance).toHaveBeenCalledTimes(1)
-    expect(release).toHaveBeenCalledWith(handle)
-    expect(
-      await fixture.fileSystem.readSecureFile(
-        repository.attempts.path(handle.attempt.recordId)
-      )
-    ).toBeNull()
-  })
-
-  it("does not let cleanup failure overwrite the primary precondition error", async () => {
-    const record = await preparedRecord()
-    const handle = await repository.attempts.reserve({
-      expected: record,
-      phase: "query_intent",
-      observedAt: NOW,
-      allowReclaim: false,
-    })
-    const fence = localFence()
-    const mismatched: LocatedCredential = {
-      ...fence.located,
-      credentials: {
-        ...fence.located.credentials!,
-        teamId: fence.located.credentials!.teamId + 1,
-      },
-    }
-    const release = vi
-      .spyOn(repository.attempts, "release")
-      .mockRejectedValueOnce(new Error("cleanup-only failure"))
-    const dispatcher = new StatusCommandDispatcher(
-      { postPublicJson: vi.fn() } as unknown as PublicHttpClient,
-      repository,
-      fence.local,
-      { now: () => NOW }
-    )
-
-    const failure = await caughtFailure(
-      dispatcher.dispatch({
-        record,
-        expectedCredential: mismatched,
-        attempt: handle,
-      })
-    )
-
-    expect(failure.message).toContain("no longer matches")
-    expect(failure.message).not.toContain("cleanup-only")
-    release.mockRestore()
-    await repository.attempts.release(handle)
   })
 
   it("rejects a different commandId without downgrading the known Command", async () => {

@@ -1,74 +1,49 @@
 # @adrate/cli 0.1.0 发布说明草案
 
-本文覆盖整个 `0.1.0` release train。**该 train 的首个发布版本是 `0.1.0-beta.1`，dist-tag 为 `next`**——`npm i -g @adrate/cli` 不会装到它，需要显式 `@adrate/cli@next`。正式的 `0.1.0` 要等真实端到端验收、Windows 矩阵与 production 反代取证全部完成后才发布。
-
-状态：外部 GitHub/npm/OpenResty/E2E 闸门仍为 blocked。
-
-**第一版不支持 Accio connector。** 我们在检索范围内没有找到可据以实现和验证 custom Connector 的 manifest schema、device-code 字段与 validator，按"不猜接口"的原则没有做适配（这是对我们检索结果的说明，不是对 Accio 官方资料的判断）。两项 accio 闸门也不再是发布必需项，仍保留在名册中并维持 blocked。
+本文覆盖 `0.1.0` release train。下一 prerelease 候选为 `0.1.0-beta.6`，dist-tag 为 `next`；正式 `0.1.0` 尚未发布。
 
 ## 安装
 
-CLI 与 Agent Skills 分两步安装，两条命令缺一不可：
+prerelease：
+
+```bash
+npm install -g @adrate/cli@next
+adrate skills install
+```
+
+正式版发布后：
 
 ```bash
 npm install -g @adrate/cli
-npx skills add AdRate-io/cli -g -y
+adrate skills install
 ```
 
-## M0 命令
+## M0 能力
 
-```text
-adrate auth login [--no-wait | --resume] [--device-name <name>]
-adrate auth status
-adrate auth whoami
-adrate auth logout
-adrate capabilities
-adrate schema <capabilityId>
-adrate ads advertisers
-adrate ads campaigns list --adv-id <id>
-adrate ads campaigns get --adv-id <id> --campaign-id <id>
-adrate ads campaigns status --adv-id <id> --campaign-id <id> --set enable|disable
-adrate ads report campaigns --adv-id <id> --start-date <date> --end-date <date>
-adrate commands get (--command-id <uuid> | --idempotency-key <key>)
-adrate commands pending
-adrate commands resume --idempotency-key <key>
-adrate skills list
-adrate skills read <name> [path]
-```
+- Device Authorization 登录、凭证状态、身份查询和 logout。
+- Public API capabilities/schema 自描述。
+- Advertiser、Campaign 与 Campaign Report 只读查询。
+- 单 Campaign ENABLE/DISABLE，以及按原 idempotency key 查询和恢复未决 Command。
+- 显式 `adrate feedback` 反馈提交；不自动上报，不进入 Command pending 恢复链路。
+- `adrate-shared`、`adrate-ads` 两项 Agent Skills 的安装、列举和读取。
 
-两项 Skill 为 `adrate-shared@1.0.0` 与 `adrate-ads@1.0.0`，最低 CLI 均为 `0.1.0`。只安装 CLI 时，本地 `_notice.skills` 会提示缺失或漂移；只安装 Skills 时，壳会提示安装最低 CLI。
+完整命令面见包根 `README.md` 或 `adrate --help`。
 
-`auth status`、`capabilities`、`skills list` 在核心结果形成后可执行匿名版本检查。发现新版本时写入 `_notice.update`；固定 registry timeout 为 2 秒，成功结果在 `~/.adrate/cache/update.json` 安全缓存 24 小时。离线、超时、非 2xx、无效 semver 或缓存损坏不改变核心命令退出码；仅 `--verbose` 输出脱敏诊断。`ADRATE_NO_UPDATE_NOTIFIER=1` 只关闭更新检查，不关闭 `_notice.credential` 或 `_notice.skills`。
+## 本轮收口
 
-## 冻结 tarball
+- 远端响应只校验 CLI 实际消费的字段，允许新增展示字段和未知错误码，避免服务端安全扩展被旧 CLI 无故拒绝。
+- Status 写操作只在凭据、idempotency key、capability、目标、commandId 和正面终态证据全部匹配时报告成功；transport 或证据不足保留 pending 并退出 5。
+- Device login 只保留必要的安全 staging 和 generation/flow 防串线，不再维护本地交付账本；不确定结果可以重新登录。
+- logout 不再持久化 delivery journal。不确定结果保留本地凭据，只有精确 revoked 或已确认失效的业务码才清理。
+- 删除 CLI 更新联网检查及缓存。Skills 读取保持零网络，安装只校验当前包内的 schema、摘要与文件安全边界。
+- 发布流程收敛为私有源单向镜像、version tag、verify 一次 pack、publish 同一 tarball。publish job 只复核制品身份和 SHA-256，不复制完整 verifier。
 
-待发布包必须精确包含以下 15 项：
+## 升级说明
 
-```text
-LICENSE
-dist/bin.js
-dist/bin.js.map
-dist/bin.d.ts
-package.json
-README.md
-scripts/keychain-smoke.mjs
-skills/adrate-shared/SKILL.md
-skills/adrate-shared/skill-manifest.json
-skills/adrate-shared/agents/openai.yaml
-skills/adrate-ads/SKILL.md
-skills/adrate-ads/skill-manifest.json
-skills/adrate-ads/agents/openai.yaml
-skills-content/adrate-shared/SKILL.md
-skills-content/adrate-ads/SKILL.md
-```
+当前没有外部用户，不为 beta 瞬态文件保留跨版本迁移层。升级时直接重装并重新 login；如果本地存在仍需恢复的 pending Command，先用旧版按原 idempotency key 恢复，再升级。
 
-包只暴露 `adrate` 二进制，`exports` 为空，source map 不含 `sourcesContent`。tarball 不包含源码、测试、lockfile、release/mirror/Accio artifact、`.env`、测试凭证或主站源码。
+## 已知范围
 
-## 已知外部阻断
-
-- npm 包 bootstrap、2FA enforcement、Trusted Publisher 和 provenance 尚未在真实账户验收。
-- `AdRate-io/cli` 公开远端、保护规则、单向镜像提交和 GitHub Release 尚未创建/验收。
-- test/production OpenResty、trusted CIDR、源站防绕过、90/110/120 秒与 76 秒最慢链路尚未实测。
-- Windows 真实硬件 Keychain/fallback 尚未验收。
-
-Accio 不在此列：它已从 required 闸门摘除，属于 M0 范围外的后续适配，不阻断本版发布。
+- 第一版不支持 Accio connector。我们在检索范围内没有找到足以实现和验证 custom Connector 的 manifest schema、device-code 字段与 validator，因此没有猜接口。
+- 首个 stable 发布前仍需完成 Boss 的端到端验收和真实 Windows 普通用户环境验收。
+- 包只暴露 `adrate` 二进制，不提供库导入面；source map 不包含 `sourcesContent`。

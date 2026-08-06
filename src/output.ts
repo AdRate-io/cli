@@ -4,7 +4,7 @@ import {
   TEST_BROWSER_ORIGIN,
 } from "./constants.js"
 import {
-  hasExactKeys,
+  hasKeys,
   isCanonicalUtcIso,
   isPlainObject,
   isSafeIntegerInRange,
@@ -24,25 +24,6 @@ const USAGE_CODES = new Set([
   "TIKTOK_AUTH_ID_REQUIRED",
   "TIKTOK_AUTH_INVALID_FOR_ACCOUNT",
 ])
-const RETRYABLE_CODES = new Set([
-  "RATE_LIMITED",
-  "UPSTREAM_RATE_LIMITED",
-  "RESOURCE_BUSY",
-  "DEPENDENCY_UNAVAILABLE",
-])
-const SUGGESTED_ACTIONS = new Set([
-  "reauthorize_credential",
-  "open_account_security",
-  "renew_subscription",
-  "upgrade_plan",
-  "choose_auth",
-  "reauthorize_tiktok",
-  "retry_after",
-  "query_command",
-  "resume_command",
-  "contact_support",
-  "confirm_environment",
-])
 const BROWSER_ORIGINS = new Set([
   PRODUCTION_BROWSER_ORIGIN,
   TEST_BROWSER_ORIGIN,
@@ -61,9 +42,7 @@ export function exitCodeForEnvelope(envelope: CliEnvelope): 0 | 1 | 2 | 3 | 4 {
   if (AUTHENTICATION_CODES.has(envelope.error.code)) {
     return EXIT_CODE.authentication
   }
-  if (envelope.error.retryable && RETRYABLE_CODES.has(envelope.error.code)) {
-    return EXIT_CODE.retryable
-  }
+  if (envelope.error.retryable) return EXIT_CODE.retryable
   return EXIT_CODE.business
 }
 
@@ -119,15 +98,6 @@ export interface OutputStreams {
   stderr: Pick<NodeJS.WriteStream, "write">
 }
 
-export interface AcknowledgedOutputStream {
-  write: (value: string, callback: (error?: Error | null) => void) => boolean
-}
-
-export interface AcknowledgedOutputStreams {
-  stdout: AcknowledgedOutputStream
-  stderr: AcknowledgedOutputStream
-}
-
 function line(stream: Pick<NodeJS.WriteStream, "write">, value: string): void {
   stream.write(value.endsWith("\n") ? value : `${value}\n`)
 }
@@ -151,12 +121,7 @@ function safeAuthorizationCandidates(
   for (const item of value) {
     if (
       !isPlainObject(item) ||
-      !hasExactKeys(item, [
-        "authId",
-        "displayName",
-        "status",
-        "lastSyncedAt",
-      ]) ||
+      !hasKeys(item, ["authId", "displayName", "status", "lastSyncedAt"]) ||
       !isSafeIntegerInRange(item.authId, 1) ||
       !(
         item.displayName === null ||
@@ -167,7 +132,7 @@ function safeAuthorizationCandidates(
       item.status !== "active" ||
       !isCanonicalUtcIso(item.lastSyncedAt)
     ) {
-      return null
+      continue
     }
     candidates.push({
       authId: item.authId,
@@ -176,7 +141,7 @@ function safeAuthorizationCandidates(
       lastSyncedAt: item.lastSyncedAt,
     })
   }
-  return candidates
+  return candidates.length > 0 || value.length === 0 ? candidates : null
 }
 
 function safeResolutionUrl(value: unknown): string | null {
@@ -217,10 +182,7 @@ function humanError(error: CliErrorEnvelope): Array<string> {
     }
   }
   const suggestedAction = error.error.details.suggestedAction
-  if (
-    typeof suggestedAction === "string" &&
-    SUGGESTED_ACTIONS.has(suggestedAction)
-  ) {
+  if (typeof suggestedAction === "string" && suggestedAction.length > 0) {
     lines.push(`Suggested action: ${suggestedAction}`)
   }
   const resolutionUrl = safeResolutionUrl(error.error.details.resolutionUrl)
@@ -289,51 +251,4 @@ function outcomeChunks(
     })
   }
   return chunks
-}
-
-/** 等待每笔 write callback 完成；只有此 Promise 成功才允许确认投递。 */
-export async function renderOutcomeAndWait(
-  outcome: CliOutcome<CliEnvelope>,
-  options: { json: boolean; verbose: boolean },
-  streams: AcknowledgedOutputStreams
-): Promise<void> {
-  for (const output of outcomeChunks(outcome, options)) {
-    if (output.mode === "raw") {
-      await writeRawAndWait(streams[output.stream], output.value)
-    } else {
-      await writeLineAndWait(streams[output.stream], output.value)
-    }
-  }
-}
-
-export function writeRawAndWait(
-  stream: AcknowledgedOutputStream,
-  value: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      stream.write(value, (error?: Error | null) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    } catch (error) {
-      reject(error)
-    }
-  })
-}
-
-export function writeLineAndWait(
-  stream: AcknowledgedOutputStream,
-  value: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      stream.write(terminatedLine(value), (error?: Error | null) => {
-        if (error) reject(error)
-        else resolve()
-      })
-    } catch (error) {
-      reject(error)
-    }
-  })
 }

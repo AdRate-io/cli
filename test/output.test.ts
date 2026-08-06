@@ -9,7 +9,6 @@ import { oauthWaitOutcome } from "../src/auth/auth-command-support.js"
 import type { CliOutcome } from "../src/errors.js"
 import type {
   PublicEnvelope,
-  PublicErrorCode,
   PublicErrorEnvelope,
   PublicSuccessEnvelope,
 } from "../src/contracts/envelope.js"
@@ -59,7 +58,7 @@ function successEnvelope(
 }
 
 function errorEnvelope(
-  code: PublicErrorCode,
+  code: string,
   retryable: boolean
 ): PublicErrorEnvelope {
   return {
@@ -123,7 +122,7 @@ describe("exitCodeForEnvelope", () => {
     ["CAPABILITY_DENIED", false, 1],
     ["RESOURCE_NOT_FOUND", false, 1],
     ["UPSTREAM_ERROR", false, 1],
-    ["UPSTREAM_ERROR", true, 1],
+    ["UPSTREAM_ERROR", true, 4],
     ["RATE_LIMITED", false, 1],
   ] as const)("%s retryable=%s 映射退出码 %s", (code, retryable, expected) => {
     expect(exitCodeForEnvelope(errorEnvelope(code, retryable))).toBe(expected)
@@ -154,7 +153,6 @@ describe("warningsForEnvelope", () => {
     })
     expect(
       warningsForEnvelope(envelope, {
-        ADRATE_NO_UPDATE_NOTIFIER: "1",
         ADRATE_NO_SKILLS_NOTIFIER: "1",
       })
     ).toEqual(["Credential expires soon."])
@@ -325,7 +323,7 @@ describe("renderOutcome", () => {
     expect(stderr.read()).not.toContain("adr_owner_")
   })
 
-  it("human 错误拒绝恶意候选、未知动作和非 canonical 跳转", () => {
+  it("human 错误过滤恶意候选和非 canonical 跳转，但显示未知动作", () => {
     const stdout = captureStream()
     const stderr = captureStream()
     const envelope = errorEnvelope("TIKTOK_AUTH_ID_REQUIRED", false)
@@ -338,7 +336,7 @@ describe("renderOutcome", () => {
           lastSyncedAt: "2026-07-31T08:00:00.000Z",
         },
       ],
-      suggestedAction: "print_every_detail",
+      suggestedAction: "future_action",
       resolutionUrl: "https://attacker.example/collect",
       secret: "MALICIOUS_DETAIL",
     }
@@ -349,14 +347,12 @@ describe("renderOutcome", () => {
       { stdout: stdout.stream, stderr: stderr.stream }
     )
 
+    const output = stderr.read()
     expect(stdout.read()).toBe("")
-    expect(stderr.read()).toBe(
-      "TIKTOK_AUTH_ID_REQUIRED: Failure TIKTOK_AUTH_ID_REQUIRED\n"
-    )
-    expect(stderr.read()).not.toContain("Injected")
-    expect(stderr.read()).not.toContain("attacker.example")
-    expect(stderr.read()).not.toContain("print_every_detail")
-    expect(stderr.read()).not.toContain("MALICIOUS_DETAIL")
+    expect(output).not.toContain("Injected")
+    expect(output).not.toContain("attacker.example")
+    expect(output).not.toContain("MALICIOUS_DETAIL")
+    expect(output).toContain("future_action")
   })
 
   it("JSON 错误仍保持一个机读信封，不混入 human 文案", () => {

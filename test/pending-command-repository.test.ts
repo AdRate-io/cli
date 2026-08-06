@@ -88,8 +88,12 @@ describe("pending Command frozen contract", () => {
     ).toEqual(record)
   })
 
+  it("tolerates extra fields on persisted records", () => {
+    const record = createPreparedPendingCommand(input())
+    expect(parsePendingCommandRecord({ ...record, extra: true })).not.toBeNull()
+  })
+
   it.each([
-    ["extra field", { extra: true }],
     ["unknown format", { formatVersion: 2 }],
     ["unsafe issuer", { issuerOrigin: "https://evil.example" }],
     ["bad credential", { credentialId: "credential" }],

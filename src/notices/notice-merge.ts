@@ -8,7 +8,7 @@ import type { JsonObject } from "../contracts/json.js"
  */
 export function replaceLocalNotice(
   envelope: CliEnvelope,
-  key: "skills" | "update",
+  key: "skills",
   value: JsonObject | null
 ): CliEnvelope {
   const current = envelope.meta._notice

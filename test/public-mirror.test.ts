@@ -162,18 +162,10 @@ describe("public mirror policy", () => {
     expect(paths).toContain(".github/workflows/publish.yml")
     expect(paths).toContain("scripts/public-mirror.mjs")
     expect(paths).toContain("integrations/accio/validation.json")
-    expect(paths).toContain("release/trusted-evidence-pins.json")
     expect(paths).not.toContain("dist/bin.js")
     expect(paths.some((path) => path.startsWith("node_modules/"))).toBe(false)
     expect(isAllowedMirrorPath("src/bin.ts")).toBe(true)
-    expect(
-      isAllowedMirrorPath("release/evidence/github-public-mirror.json")
-    ).toBe(true)
-    expect(isAllowedMirrorPath("release/trusted-evidence-pins.json")).toBe(true)
     expect(isAllowedMirrorPath("release/unreviewed.json")).toBe(false)
-    expect(isAllowedMirrorPath("release/evidence/unreviewed-gate.json")).toBe(
-      false
-    )
     expect(isAllowedMirrorPath("skills/unknown/SKILL.md")).toBe(false)
     expect(isAllowedMirrorPath("private-main-site.ts")).toBe(false)
     // 信任根刻意用 branch ruleset 而非 CODEOWNERS：三个合法位置都在 allowlist 之外，
@@ -229,9 +221,9 @@ describe("public mirror policy", () => {
       "Target mirror commit is not the direct child of its recorded base commit."
     )
 
-    // 第 3 行：手工提交且自洽重签，但引入 allowlist 之外路径 —— manifest 校验拦下。
-    // 这里用 CODEOWNERS 而不是 LICENSE：LICENSE 自 2026-08-03 起已进 allowlist，
-    // 拿它当"白名单外"的例子会让这条断言恒不成立。
+    // 第 3 行：手工提交且自洽重签，但引入 allowlist 之外路径 —— collectMirrorSource 拦下。
+    // parsePriorManifest 只做语法安全性检查（不用 allowlist），因此 manifest 能被解析，
+    // 但 collectMirrorSource 遍历 committed 文件时仍拒绝 allowlist 外路径。
     const outside = await syntheticMirrorTarget(source)
     outside.tracked.set("CODEOWNERS", Buffer.from("* @someone\n"))
     await materializeTracked(outside.root, outside.tracked)
@@ -243,7 +235,7 @@ describe("public mirror policy", () => {
     await git(outside.root, "add", "-A")
     await git(outside.root, "commit", "-m", "hand-added CODEOWNERS, re-signed")
     await expect(collectMirrorSource(outside.root)).rejects.toThrow(
-      "Target mirror manifest is invalid."
+      "Committed source contains a path outside the mirror allowlist: CODEOWNERS"
     )
 
     // 第 4 行：手工提交且自洽重签，只动 allowlist 内路径 —— 工具不阻断。
@@ -619,7 +611,6 @@ describe("public mirror commit and apply gates", () => {
         ...process.env,
         ADRATE_SKIP_PUBLIC_MIRROR_E2E: "1",
         ADRATE_NO_SKILLS_NOTIFIER: "1",
-        ADRATE_NO_UPDATE_NOTIFIER: "1",
       }
       for (const [command, args] of [
         ["pnpm", ["typecheck"]],

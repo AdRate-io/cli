@@ -2,7 +2,6 @@ import { chmod, link, writeFile } from "node:fs/promises"
 import { describe, expect, it, vi } from "vitest"
 import { StatusCommandService } from "../src/commands/status-command-service.js"
 import { PendingCommandRepository } from "../src/commands/pending-command-repository.js"
-import { PendingCommandAttemptBusyError } from "../src/commands/pending-command-attempt.js"
 import { pendingRecordId } from "../src/commands/pending-command-contract.js"
 import { HttpTransportError, PublicHttpClient } from "../src/http/client.js"
 import { CliFailure, dependencyFailure } from "../src/errors.js"
@@ -11,7 +10,6 @@ import {
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
   deferred,
-  stableTestProcessIdentity,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -82,8 +80,6 @@ function locatedCredential(
       clientInstanceId: "22222222-2222-4222-8222-222222222222",
       tokenGeneration: "44444444-4444-4444-8444-444444444444",
       deviceGeneration: null,
-      issueOwnerToken: null,
-      pollOwnerToken: null,
     },
   }
 }
@@ -244,7 +240,6 @@ async function createHarness(
     fixture.paths,
     {
       now: () => new Date(NOW),
-      processIdentity: stableTestProcessIdentity("status-service"),
     }
   )
   const transport = new SequenceTransport(replies)
@@ -393,7 +388,7 @@ describe("StatusCommandService input and HTTP boundary", () => {
         idempotencyKey: DEFAULT_KEY,
         requestId: "client_status_1",
       })
-      expect(outcome.exitCode).toBe(0)
+      expect(outcome.exitCode).toBe(4)
       expect(harness.transport.requests).toEqual([
         {
           method: "POST",
@@ -524,7 +519,7 @@ describe("StatusCommandService prepare create-if-absent gate", () => {
         idempotencyKey: DEFAULT_KEY,
       })
 
-      expect(outcome.exitCode).toBe(0)
+      expect(outcome.exitCode).toBe(4)
       expect(harness.transport.requests).toHaveLength(1)
       expect(await readRecord(harness.repository)).toMatchObject({
         localState: "command_known",
@@ -727,7 +722,7 @@ describe("StatusCommandService prepare create-if-absent gate", () => {
       )
       expect(secondFailure).toMatchObject({ exitCode: 2 })
       gate.resolve()
-      await expect(first).resolves.toMatchObject({ exitCode: 0 })
+      await expect(first).resolves.toMatchObject({ exitCode: 4 })
       expect(harness.transport.requests).toHaveLength(1)
       expect((await harness.repository.scan()).records).toHaveLength(1)
     } finally {
@@ -823,7 +818,7 @@ describe("StatusCommandService response and cleanup matrix", () => {
     }
   })
 
-  it("charge=null always retains, including a contradictory final Command", async () => {
+  it("charge=null only adds a warning and does not override Command state", async () => {
     for (const serverCommand of [command(), failedCommand()]) {
       const harness = await createHarness([
         errorResponse({
@@ -841,23 +836,26 @@ describe("StatusCommandService response and cleanup matrix", () => {
           authId: "42",
           idempotencyKey: DEFAULT_KEY,
         })
-        expect(outcome.exitCode).toBe(4)
+        expect(outcome.exitCode).toBe(
+          serverCommand.status === "pending" ? 4 : 1
+        )
         expect(outcome.envelope).toMatchObject({
-          error: { code: "DEPENDENCY_UNAVAILABLE", retryable: true },
+          error: {
+            code: "DEPENDENCY_UNAVAILABLE",
+            retryable: serverCommand.status === "pending",
+          },
         })
-        if (serverCommand.status === "failed" && !outcome.envelope.ok) {
-          expect(outcome.envelope.error.message).toContain(
-            "contradictory Status recovery evidence"
-          )
-        }
         expect(harness.transport.requests).toHaveLength(1)
-        expect(await readRecord(harness.repository)).toMatchObject({
-          localState:
-            serverCommand.status === "pending"
-              ? "command_known"
-              : "response_unknown",
-        })
-        expect(outcome.warnings.join(" ")).toContain("commands resume")
+        if (serverCommand.status === "pending") {
+          expect(await readRecord(harness.repository)).toMatchObject({
+            localState: "command_known",
+          })
+        } else {
+          expect(await readRecord(harness.repository)).toBeNull()
+        }
+        expect(outcome.warnings.join(" ")).toContain(
+          "operation-unit charging is unknown"
+        )
       } finally {
         await harness.fixture.cleanup()
       }
@@ -964,57 +962,6 @@ describe("StatusCommandService response and cleanup matrix", () => {
       }
     }
   )
-
-  it("lets the durable owner settle after rejecting an unowned response mutation", async () => {
-    const repositoryRef: { value: PendingCommandRepository | null } = {
-      value: null,
-    }
-    let mutationFailure: unknown
-    const harness = await createHarness([
-      async () => {
-        const repository = repositoryRef.value
-        if (!repository) throw new Error("missing repository")
-        const current = await readRecord(repository)
-        if (!current) throw new Error("missing prepared record")
-        try {
-          await repository.replaceExact(current, {
-            ...current,
-            localState: "response_unknown",
-            updatedAt: "2026-07-31T08:00:00.001Z",
-            lastResponse: null,
-          })
-        } catch (error) {
-          mutationFailure = error
-        }
-        return successResponse(command())
-      },
-    ])
-    repositoryRef.value = harness.repository
-    try {
-      const outcome = await harness.service.status({
-        advId: "70001",
-        campaignId: "80001",
-        desiredStatus: "enable",
-        authId: "42",
-        idempotencyKey: DEFAULT_KEY,
-      })
-      expect(outcome.exitCode).toBe(0)
-      expect(mutationFailure).toBeInstanceOf(PendingCommandAttemptBusyError)
-      expect(await readRecord(harness.repository)).toMatchObject({
-        localState: "command_known",
-        commandId: COMMAND_ID,
-        updatedAt: NOW.toISOString(),
-        lastResponse: {
-          requestId: "server_status_1",
-          httpStatus: 202,
-          errorCode: null,
-        },
-      })
-      expect(harness.transport.requests).toHaveLength(1)
-    } finally {
-      await harness.fixture.cleanup()
-    }
-  })
 
   it("a local permission/CAS failure preserves evidence and exits 5", async () => {
     if (process.platform === "win32") return

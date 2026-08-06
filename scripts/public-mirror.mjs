@@ -28,17 +28,6 @@ const DEFAULT_SOURCE_ROOT = resolve(dirname(SCRIPT_PATH), "..")
 const MIRROR_MANIFEST = ".adrate-public-mirror.json"
 const SHA_PATTERN = /^[0-9a-f]{40}$/
 const SKILL_NAMES = new Set(["adrate-shared", "adrate-ads"])
-const RELEASE_EVIDENCE_IDS = new Set([
-  "github-public-mirror",
-  "npm-bootstrap-and-2fa",
-  "npm-trusted-publisher",
-  "openresty-test",
-  "openresty-production",
-  "accio-official-connector",
-  "real-cli-e2e",
-  "windows-hardware",
-  "accio-capacity",
-])
 const ROOT_FILES = new Set([
   ".gitignore",
   "LICENSE",
@@ -56,7 +45,6 @@ const REQUIRED_FILES = Object.freeze([
   "README.md",
   "package.json",
   "pnpm-lock.yaml",
-  "release/trusted-evidence-pins.json",
   "scripts/public-mirror.mjs",
   "scripts/release-gate.mjs",
   "scripts/secret-patterns.mjs",
@@ -72,8 +60,8 @@ function toPosix(path) {
   return path.split(sep).join("/")
 }
 
-function assertRelativePath(path) {
-  if (
+function isSafeRelativePath(path) {
+  return !(
     path.length === 0 ||
     !/^[A-Za-z0-9._/-]+$/.test(path) ||
     isAbsolute(path) ||
@@ -84,7 +72,11 @@ function assertRelativePath(path) {
     path
       .split("/")
       .some((segment) => segment === "" || segment === "." || segment === "..")
-  ) {
+  )
+}
+
+function assertRelativePath(path) {
+  if (!isSafeRelativePath(path)) {
     throw new Error("Mirror path escaped its root.")
   }
 }
@@ -117,10 +109,6 @@ export function isAllowedMirrorPath(path) {
   if (/^src\/.+\.ts$/.test(path) || /^test\/.+\.ts$/.test(path)) return true
   if (/^scripts\/.+\.(?:mjs|d\.mts)$/.test(path)) return true
   if (/^release\/[A-Za-z0-9._-]+\.md$/.test(path)) return true
-  if (path === "release/external-readiness.json") return true
-  if (path === "release/trusted-evidence-pins.json") return true
-  const evidence = /^release\/evidence\/([A-Za-z0-9-]+)\.json$/.exec(path)
-  if (evidence) return RELEASE_EVIDENCE_IDS.has(evidence[1])
   if (
     path === "integrations/accio/compatibility.md" ||
     path === "integrations/accio/validation.json"
@@ -344,7 +332,7 @@ function parsePriorManifest(text) {
       Array.isArray(entry) ||
       Object.keys(entry).sort().join(",") !== "path,sha256" ||
       typeof entry.path !== "string" ||
-      !isAllowedMirrorPath(entry.path) ||
+      !isSafeRelativePath(entry.path) ||
       !/^[0-9a-f]{64}$/.test(entry.sha256) ||
       seen.has(entry.path)
     ) {
@@ -731,6 +719,7 @@ async function verifyAppliedTree(plan, manifest, rootIdentity) {
     throw new Error("Mirror manifest verification failed after atomic write.")
   }
   const allowedDirty = new Set(expectedPaths)
+  for (const removed of plan.summary.removed) allowedDirty.add(removed)
   // 这里必须读未经 trim 的原始 stdout：porcelain v1 的修改行形如 " M path"，
   // 首字符是空格。git() 会 trim 掉整段输出的首尾空白，从而吃掉第一行的前导
   // 空格，使随后的 slice(3) 多切一个字符。由于 manifest 以 "." 开头必然排在

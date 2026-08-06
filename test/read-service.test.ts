@@ -18,7 +18,6 @@ import type { ReadCommand } from "../src/parser.js"
 const CREDENTIAL_ID = "11111111-1111-4111-8111-111111111111"
 const TOKEN_GENERATION = "22222222-2222-4222-8222-222222222222"
 const DEVICE_GENERATION = "33333333-3333-4333-8333-333333333333"
-const POLL_OWNER_TOKEN = "44444444-4444-4444-8444-444444444444"
 const LOCATED: LocatedCredential = {
   index: {
     tokenIndexFormatVersion: 1,
@@ -30,11 +29,9 @@ const LOCATED: LocatedCredential = {
     credentialId: CREDENTIAL_ID,
     clientInstanceId: "cli-instance-1",
     deviceGeneration: DEVICE_GENERATION,
-    pollAttemptOwnerToken: POLL_OWNER_TOKEN,
     deviceName: "Boss-Mac",
     tokenReceivedAt: "2026-07-31T08:00:00.000Z",
     storageKind: "keychain",
-    storageCommit: null,
   },
   token: `adr_owner_${CREDENTIAL_ID}_${"A".repeat(43)}`,
   credentials: {
@@ -56,8 +53,6 @@ const LOCATED: LocatedCredential = {
     clientInstanceId: "cli-instance-1",
     tokenGeneration: TOKEN_GENERATION,
     deviceGeneration: DEVICE_GENERATION,
-    issueOwnerToken: null,
-    pollOwnerToken: POLL_OWNER_TOKEN,
   },
 }
 

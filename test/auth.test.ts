@@ -7,7 +7,7 @@ import { AuthCleanupCoordinator } from "../src/auth/auth-cleanup-coordinator.js"
 import { DevicePollCoordinator } from "../src/auth/device-poll-coordinator.js"
 import { LocalCredentialCoordinator } from "../src/auth/local-credentials.js"
 import { CliApplication } from "../src/application.js"
-import { DEVICE_DELIVERY_SAFETY_WINDOW_MS, M0_SCOPE } from "../src/constants.js"
+import { M0_SCOPE } from "../src/constants.js"
 import { HttpTransportError, PublicHttpClient } from "../src/http/client.js"
 import { renderOutcome } from "../src/output.js"
 import { runCli } from "../src/runner.js"
@@ -15,11 +15,8 @@ import { CredentialStore } from "../src/storage/credential-backend.js"
 import { createCliPaths } from "../src/storage/paths.js"
 import { SecureFileSystem } from "../src/storage/secure-files.js"
 import { CliStateStore } from "../src/storage/state-store.js"
-import type {
-  ProcessIdentity,
-  ProcessIdentityProbe,
-  ProcessIdentityStatus,
-} from "../src/auth/process-identity.js"
+import { CliFailure } from "../src/errors.js"
+import type { CliOutcome } from "../src/errors.js"
 import type {
   HttpRequest,
   HttpResponse,
@@ -40,7 +37,6 @@ const CREDENTIAL_ID = "11111111-1111-4111-8111-111111111111"
 const CLIENT_INSTANCE_ID = "22222222-2222-4222-8222-222222222222"
 const TOKEN_GENERATION = "33333333-3333-4333-8333-333333333333"
 const DEVICE_GENERATION = "44444444-4444-4444-8444-444444444444"
-const POLL_OWNER_TOKEN = "55555555-5555-4555-8555-555555555555"
 const DEVICE_CODE = "A".repeat(43)
 const TOKEN = `adr_owner_${CREDENTIAL_ID}_${"A".repeat(43)}`
 const NOW = Date.parse("2026-07-31T02:00:00.000Z")
@@ -122,51 +118,7 @@ interface Harness {
   fallback: MemoryCredentialBackend
   transport: QueueTransport
   auth: AuthService
-  processRegistry: TestProcessRegistry
-  processIdentity: ProcessIdentity
   sleepCalls: { value: number }
-}
-
-class TestProcessRegistry {
-  private readonly processes = new Map<number, string>()
-  private readonly permissionUnknown = new Set<number>()
-  private nextPid = 10_000
-
-  createProcess(label: string): ProcessIdentity {
-    const identity = {
-      pid: this.nextPid++,
-      fingerprint: `test-process:${label}:${this.nextPid}`,
-    }
-    this.processes.set(identity.pid, identity.fingerprint)
-    return identity
-  }
-
-  probeFor(current: ProcessIdentity): ProcessIdentityProbe {
-    return {
-      current: () => Promise.resolve(current),
-      inspect: (expected) => Promise.resolve(this.inspect(expected)),
-    }
-  }
-
-  stop(identity: ProcessIdentity): void {
-    this.processes.delete(identity.pid)
-    this.permissionUnknown.delete(identity.pid)
-  }
-
-  reuse(identity: ProcessIdentity): void {
-    this.processes.set(identity.pid, `${identity.fingerprint}:reused`)
-  }
-
-  denyProbe(identity: ProcessIdentity): void {
-    this.permissionUnknown.add(identity.pid)
-  }
-
-  private inspect(expected: ProcessIdentity): ProcessIdentityStatus {
-    if (this.permissionUnknown.has(expected.pid)) return "permission_unknown"
-    const fingerprint = this.processes.get(expected.pid)
-    if (fingerprint === undefined) return "dead"
-    return fingerprint === expected.fingerprint ? "same_process" : "reused"
-  }
 }
 
 const roots: Array<string> = []
@@ -190,12 +142,9 @@ async function createHarness(): Promise<Harness> {
   const credentials = new CredentialStore(keychain, fallback)
   const transport = new QueueTransport()
   const now = { value: NOW }
-  const processRegistry = new TestProcessRegistry()
-  const processIdentity = processRegistry.createProcess("owner")
   const sleepCalls = { value: 0 }
   const local = new LocalCredentialCoordinator(state, credentials, {
     now: () => new Date(now.value),
-    processIdentity: processRegistry.probeFor(processIdentity),
   })
   const auth = new AuthService({
     http: new PublicHttpClient(transport),
@@ -215,8 +164,6 @@ async function createHarness(): Promise<Harness> {
     fallback,
     transport,
     auth,
-    processRegistry,
-    processIdentity,
     sleepCalls,
   }
 }
@@ -230,13 +177,11 @@ function createPeer(
     new SecureFileSystem({ root: harness.root }),
     paths
   )
-  const processIdentity = harness.processRegistry.createProcess("peer")
   const local = new LocalCredentialCoordinator(
     state,
     new CredentialStore(harness.keychain, harness.fallback),
     {
       now: () => new Date(harness.now.value),
-      processIdentity: harness.processRegistry.probeFor(processIdentity),
     }
   )
   return {
@@ -244,7 +189,6 @@ function createPeer(
     state,
     local,
     transport,
-    processIdentity,
     auth: new AuthService({
       http: new PublicHttpClient(transport),
       local,
@@ -308,51 +252,6 @@ function captureStream(): {
     } as Pick<NodeJS.WriteStream, "write">,
     read: () => output,
   }
-}
-
-function captureAcknowledgedStream(): {
-  stream: {
-    write: (value: string, callback: (error?: Error | null) => void) => boolean
-  }
-  read: () => string
-  callbacks: () => number
-} {
-  let output = ""
-  let callbackCount = 0
-  return {
-    stream: {
-      write(value, callback) {
-        output += value
-        queueMicrotask(() => {
-          callbackCount += 1
-          callback()
-        })
-        return true
-      },
-    },
-    read: () => output,
-    callbacks: () => callbackCount,
-  }
-}
-
-function createAuthCliApplication(auth: AuthService): CliApplication {
-  return new CliApplication(
-    auth,
-    {
-      execute() {
-        return Promise.reject(
-          new Error("auth entry must not call read service")
-        )
-      },
-    } as never,
-    {
-      campaignStatus: { status: vi.fn() },
-      commandQuery: { get: vi.fn() },
-      pendingCommands: { pending: vi.fn() },
-      commandResume: { resume: vi.fn() },
-      skills: { list: vi.fn(), read: vi.fn() },
-    }
-  )
 }
 
 function enqueueDeviceCode(
@@ -484,34 +383,6 @@ async function issue(harness: Harness): Promise<void> {
   expect(outcome.exitCode).toBe(0)
 }
 
-async function leaveAcknowledgedPollCrash(harness: Harness): Promise<void> {
-  await issue(harness)
-  harness.now.value += 5_000
-  harness.transport.enqueue((input) =>
-    response(input, 400, { error: "authorization_pending" })
-  )
-  const originalClearPoll = harness.state.clearDevicePollAttempt.bind(
-    harness.state
-  )
-  let injected = false
-  harness.state.clearDevicePollAttempt = () => {
-    if (!injected) {
-      injected = true
-      return Promise.reject(
-        new Error("simulated crash before acknowledged poll cleanup")
-      )
-    }
-    return originalClearPoll()
-  }
-  await expect(
-    harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-  ).rejects.toThrow("simulated crash")
-  harness.state.clearDevicePollAttempt = originalClearPoll
-  expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-    phase: "response_acknowledged",
-  })
-}
-
 async function installStoredCredential(
   harness: Harness,
   withMetadata = false
@@ -526,11 +397,9 @@ async function installStoredCredential(
     credentialId: CREDENTIAL_ID,
     clientInstanceId: CLIENT_INSTANCE_ID,
     deviceGeneration: DEVICE_GENERATION,
-    pollAttemptOwnerToken: POLL_OWNER_TOKEN,
     deviceName: "test-device",
     tokenReceivedAt: "2026-07-31T02:00:00.000Z",
     storageKind: "keychain",
-    storageCommit: null,
   }
   await harness.state.withAuthLock(async () => {
     await harness.state.ensureConfig("production")
@@ -550,6 +419,7 @@ async function installStoredCredential(
         clientInstanceId: index.clientInstanceId,
         loggedInAt: index.tokenReceivedAt,
         cliVersion: "0.1.0",
+        absoluteExpiresAt: "2026-08-30T02:00:00.000Z",
       })
     }
   })
@@ -559,14 +429,6 @@ async function installStoredCredential(
   )
   return index
 }
-
-type LogoutCleanupFailurePoint =
-  | "prepared"
-  | "keychain"
-  | "credentials"
-  | "device"
-  | "token_index"
-  | "reservation"
 
 async function installLogoutCleanupFixture(harness: Harness): Promise<void> {
   await issue(harness)
@@ -580,215 +442,16 @@ async function installLogoutCleanupFixture(harness: Harness): Promise<void> {
       localState: "token_received",
       deviceCode: null,
       userCode: null,
-      deliveryVerificationAttemptedAt: null,
-      terminalEvidence: null,
     })
   })
 }
 
-function injectLogoutCleanupFailure(
-  harness: Harness,
-  point: LogoutCleanupFailurePoint
-): () => void {
-  if (point === "prepared") {
-    const original = harness.state.writeAuthCleanupReservation.bind(
-      harness.state
-    )
-    let injected = false
-    harness.state.writeAuthCleanupReservation = async (reservation) => {
-      await original(reservation)
-      if (!injected && reservation.phase === "prepared") {
-        injected = true
-        throw new Error("simulated prepared crash")
-      }
-    }
-    return () => {
-      harness.state.writeAuthCleanupReservation = original
-    }
-  }
-  if (point === "keychain") {
-    harness.keychain.onRemove = () =>
-      Promise.reject(new Error("simulated Keychain delete crash"))
-    return () => {
-      harness.keychain.onRemove = null
-    }
-  }
-
-  const target =
-    point === "credentials"
-      ? harness.state.paths.credentials
-      : point === "device"
-        ? harness.state.paths.deviceCurrent
-        : point === "token_index"
-          ? harness.state.paths.tokenIndex
-          : harness.state.paths.authCleanupReservation
-  const fileSystem = harness.state.fileSystem
-  const original = fileSystem.removeSecureFile.bind(fileSystem)
-  let injected = false
-  fileSystem.removeSecureFile = async (path) => {
-    const removed = await original(path)
-    if (!injected && path === target) {
-      injected = true
-      throw new Error(`simulated ${point} pruning crash`)
-    }
-    return removed
-  }
+function injectLogoutCleanupFailure(harness: Harness): () => void {
+  harness.keychain.onRemove = () =>
+    Promise.reject(new Error("simulated Keychain delete crash"))
   return () => {
-    fileSystem.removeSecureFile = original
+    harness.keychain.onRemove = null
   }
-}
-
-async function installCompleteCleanupFixture(harness: Harness): Promise<void> {
-  await issue(harness)
-  const device = (await harness.state.readDeviceState())!
-  const index = await installStoredCredential(harness, true)
-  index.deviceGeneration = device.generation
-  index.pollAttemptOwnerToken = POLL_OWNER_TOKEN
-  await harness.state.withAuthLock(async () => {
-    await harness.state.writeTokenIndex(index)
-    await harness.state.writeDeviceIssueReservation({
-      formatVersion: 1,
-      ownerToken: "77777777-7777-4777-8777-777777777777",
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      clientInstanceId: device.clientInstanceId,
-      deviceName: device.deviceName,
-      createdAt: "2026-07-31T02:00:01.000Z",
-    })
-    await harness.state.writeDevicePollAttempt({
-      formatVersion: 1,
-      ownerToken: POLL_OWNER_TOKEN,
-      deviceGeneration: device.generation,
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      clientInstanceId: device.clientInstanceId,
-      phase: "ready",
-      deliveryVerification: false,
-      storageKind: "keychain",
-      ownerPid: harness.processIdentity.pid,
-      ownerProcessFingerprint: harness.processIdentity.fingerprint,
-      createdAt: "2026-07-31T02:00:01.000Z",
-      dispatchedAt: null,
-      verificationClaimedAt: null,
-      responseAcknowledgement: null,
-      leaseExpiresAt: "2026-07-31T02:00:46.000Z",
-    })
-  })
-}
-
-async function installExpiredStagingWithoutToken(
-  harness: Harness
-): Promise<{ tokenReceivedAt: string }> {
-  await issue(harness)
-  const device = (await harness.state.readDeviceState())!
-  const tokenReceivedAt = "2026-07-31T02:00:05.000Z"
-  await harness.state.withAuthLock(async () => {
-    await harness.state.writeDeviceState({
-      ...device,
-      localState: "polling",
-    })
-    await harness.state.writeDevicePollAttempt({
-      formatVersion: 1,
-      ownerToken: POLL_OWNER_TOKEN,
-      deviceGeneration: device.generation,
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      clientInstanceId: device.clientInstanceId,
-      phase: "dispatch_intent",
-      deliveryVerification: false,
-      storageKind: "keychain",
-      ownerPid: 9_000,
-      ownerProcessFingerprint: "test-process:crashed",
-      createdAt: "2026-07-31T02:00:04.000Z",
-      dispatchedAt: "2026-07-31T02:00:04.000Z",
-      verificationClaimedAt: null,
-      responseAcknowledgement: null,
-      leaseExpiresAt: "2026-07-31T02:00:45.000Z",
-    })
-    await harness.state.writeTokenIndex({
-      tokenIndexFormatVersion: 1,
-      generation: TOKEN_GENERATION,
-      state: "staging",
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      credentialKind: "owner_cli_session",
-      credentialId: CREDENTIAL_ID,
-      clientInstanceId: device.clientInstanceId,
-      deviceGeneration: device.generation,
-      pollAttemptOwnerToken: POLL_OWNER_TOKEN,
-      deviceName: device.deviceName,
-      tokenReceivedAt,
-      storageKind: "keychain",
-      storageCommit: {
-        transactionId: "88888888-8888-4888-8888-888888888888",
-        ownerPid: 9_000,
-        ownerProcessFingerprint: "test-process:crashed",
-        leaseExpiresAt: "2026-07-31T02:00:45.000Z",
-      },
-    })
-  })
-  harness.now.value += 46_000
-  return { tokenReceivedAt }
-}
-
-async function installStagingPollForIndex(
-  harness: Harness,
-  device: DeviceAuthorizationState,
-  index: TokenIndex
-): Promise<void> {
-  const commit = index.storageCommit
-  if (!commit) throw new Error("staging index must carry storage commit")
-  await harness.state.withAuthLock(async () => {
-    await harness.state.writeDeviceState({
-      ...device,
-      localState: "polling",
-    })
-    await harness.state.writeDevicePollAttempt({
-      formatVersion: 1,
-      ownerToken: index.pollAttemptOwnerToken,
-      deviceGeneration: index.deviceGeneration,
-      environment: index.environment,
-      issuerOrigin: index.issuerOrigin,
-      clientInstanceId: index.clientInstanceId,
-      phase: "dispatch_intent",
-      deliveryVerification: false,
-      storageKind: index.storageKind,
-      ownerPid: commit.ownerPid,
-      ownerProcessFingerprint: commit.ownerProcessFingerprint,
-      createdAt: "2026-07-31T02:00:04.000Z",
-      dispatchedAt: index.tokenReceivedAt,
-      verificationClaimedAt: null,
-      responseAcknowledgement: null,
-      leaseExpiresAt: commit.leaseExpiresAt,
-    })
-    await harness.state.writeTokenIndex(index)
-  })
-}
-
-async function installTerminalCrashState(harness: Harness): Promise<void> {
-  await issue(harness)
-  harness.now.value += 5_000
-  const coordinator = new DevicePollCoordinator(
-    harness.local,
-    () => new Date(harness.now.value)
-  )
-  const preparation = await coordinator.prepare()
-  if (preparation.kind !== "select_backend") throw new Error("unreachable")
-  const frozen = await coordinator.freezeBackend(preparation)
-  const dispatched = await coordinator.markDispatchIntent(frozen)
-  await harness.state.withAuthLock(() =>
-    harness.state.writeDeviceState({
-      ...dispatched.device,
-      localState: "terminal",
-      deviceCode: null,
-      userCode: null,
-      deliveryVerificationAttemptedAt: null,
-      terminalEvidence: {
-        acknowledgedAt: new Date(harness.now.value).toISOString(),
-        attempt: dispatched.attempt,
-      },
-    })
-  )
 }
 
 describe("Device Authorization", () => {
@@ -833,18 +496,9 @@ describe("Device Authorization", () => {
     },
   ])("rejects pure input $label before any lower layer", async ({ input }) => {
     const harness = await createHarness()
-    const originalReadJournal = harness.state.readLogoutDeliveryJournal.bind(
-      harness.state
-    )
-    let journalReads = 0
-    harness.state.readLogoutDeliveryJournal = () => {
-      journalReads += 1
-      return originalReadJournal()
-    }
     await expect(harness.auth.login(input)).rejects.toMatchObject({
       exitCode: 2,
     })
-    expect(journalReads).toBe(0)
     expect(harness.transport.requests).toHaveLength(0)
     expect(harness.keychain.availabilityChecks).toBe(0)
     expect(harness.fallback.availabilityChecks).toBe(0)
@@ -852,36 +506,6 @@ describe("Device Authorization", () => {
     expect(await harness.state.readConfig()).toBeNull()
     expect(await harness.state.readDeviceState()).toBeNull()
     expect(await harness.state.readDeviceIssueReservation()).toBeNull()
-  })
-
-  it("rejects invalid login argv through real output callbacks before state access", async () => {
-    const harness = await createHarness()
-    const originalReadJournal = harness.state.readLogoutDeliveryJournal.bind(
-      harness.state
-    )
-    let journalReads = 0
-    harness.state.readLogoutDeliveryJournal = () => {
-      journalReads += 1
-      return originalReadJournal()
-    }
-    const stdout = captureAcknowledgedStream()
-    const stderr = captureAcknowledgedStream()
-
-    const exitCode = await runCli(
-      createAuthCliApplication(harness.auth),
-      ["auth", "login", "--test", "--resume", "--json"],
-      { stdout: stdout.stream, stderr: stderr.stream }
-    )
-
-    expect(exitCode).toBe(2)
-    expect(journalReads).toBe(0)
-    expect(stdout.callbacks()).toBe(1)
-    expect(JSON.parse(stdout.read())).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST" },
-    })
-    expect(harness.transport.requests).toHaveLength(0)
-    expect(harness.keychain.availabilityChecks).toBe(0)
   })
 
   it.each([
@@ -938,12 +562,11 @@ describe("Device Authorization", () => {
         await harness.state.withAuthLock(() =>
           harness.state.writeDeviceIssueReservation({
             formatVersion: 1,
-            ownerToken: "77777777-7777-4777-8777-777777777777",
+            generation: "77777777-7777-4777-8777-777777777777",
             environment: "production",
             issuerOrigin: "https://api.adrate.io",
             clientInstanceId: CLIENT_INSTANCE_ID,
             deviceName: null,
-            createdAt: "2026-07-31T01:00:00.000Z",
           })
         )
       } else {
@@ -975,7 +598,7 @@ describe("Device Authorization", () => {
       await expect(
         harness.auth.login({
           global: { ...GLOBAL, test: true },
-          noWait: false,
+          noWait: true,
           resume: false,
         })
       ).rejects.toMatchObject({ exitCode: 2 })
@@ -994,7 +617,7 @@ describe("Device Authorization", () => {
     }
   )
 
-  it("issues the exact five-scope request and never exposes device_code", async () => {
+  it("issues the exact M0-scope request and never exposes device_code", async () => {
     const harness = await createHarness()
     let acquiredDuringRequest = false
     enqueueDeviceCode(harness, () =>
@@ -1036,47 +659,70 @@ describe("Device Authorization", () => {
     expect(harness.transport.requests).toHaveLength(1)
   })
 
-  it("clears a delivery tombstone at safeRestartAt without issuing a new code until the next no-wait invocation", async () => {
+  it("replaces orphaned issue staging with a fresh Device generation", async () => {
     const harness = await createHarness()
-    await issue(harness)
-    const device = (await harness.state.readDeviceState())!
-    const attemptedAt = new Date(NOW + 5_000).toISOString()
-    const safeRestartAt = Math.max(
-      new Date(device.expiresAt).getTime(),
-      new Date(attemptedAt).getTime() + DEVICE_DELIVERY_SAFETY_WINDOW_MS
-    )
-    await harness.state.withAuthLock(() =>
-      harness.state.writeDeviceState({
-        ...device,
-        localState: "delivery_unknown",
-        deliveryVerificationAttemptedAt: attemptedAt,
-      })
-    )
-    harness.now.value = safeRestartAt
-    const requestCount = harness.transport.requests.length
-
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
-    ).rejects.toMatchObject({
-      exitCode: 3,
-      envelope: {
-        error: {
-          code: "CREDENTIAL_EXPIRED",
-          details: {
-            deliveryState: "safe_restart_cleared",
-            safeRestartAt: new Date(safeRestartAt).toISOString(),
-          },
-        },
-      },
+    const config = await harness.state.ensureConfig("production")
+    const orphanedGeneration = "77777777-7777-4777-8777-777777777777"
+    await harness.state.writeDeviceIssueReservation({
+      formatVersion: 1,
+      generation: orphanedGeneration,
+      environment: "production",
+      issuerOrigin: config.issuerOrigin,
+      clientInstanceId: config.clientInstanceId,
+      deviceName: "stopped-process",
     })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-    expect(await harness.state.readDeviceState()).toBeNull()
-
     enqueueDeviceCode(harness)
+
     await expect(
-      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: true,
+        resume: false,
+        deviceName: "fresh-device",
+      })
     ).resolves.toMatchObject({ exitCode: 0 })
-    expect(harness.transport.requests).toHaveLength(requestCount + 1)
+
+    expect(await harness.state.readDeviceIssueReservation()).toBeNull()
+    expect(await harness.state.readDeviceState()).toMatchObject({
+      localState: "issued",
+      deviceName: "fresh-device",
+    })
+    expect((await harness.state.readDeviceState())?.generation).not.toBe(
+      orphanedGeneration
+    )
+  })
+
+  it("does not let an older Device issue response overwrite a fresh generation", async () => {
+    const harness = await createHarness()
+    const entered = gate<void>()
+    const release = gate<void>()
+    enqueueDeviceCode(harness, async () => {
+      entered.resolve(undefined)
+      await release.promise
+    })
+    const olderIssue = harness.auth.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+      deviceName: "older-device",
+    })
+    await entered.promise
+
+    const peer = createPeer(harness)
+    enqueueDeviceCode(peer)
+    await expect(
+      peer.auth.login({
+        global: GLOBAL,
+        noWait: true,
+        resume: false,
+        deviceName: "fresh-device",
+      })
+    ).resolves.toMatchObject({ exitCode: 0 })
+    const freshDevice = (await harness.state.readDeviceState())!
+
+    release.resolve(undefined)
+    await expect(olderIssue).rejects.toMatchObject({ exitCode: 4 })
+    expect(await harness.state.readDeviceState()).toEqual(freshDevice)
   })
 
   it("persists pending and slow_down polling boundaries", async () => {
@@ -1197,14 +843,6 @@ describe("Device Authorization", () => {
         resume: true,
       })
       await dispatched.promise
-      const competitor = createPeer(harness)
-      const competitorOutcome = await competitor.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-      expect(competitorOutcome.exitCode).toBe(4)
-      expect(competitor.transport.requests).toHaveLength(0)
       release.resolve(undefined)
       const boundary = await boundaryPromise
       expect(boundary.exitCode).toBe(4)
@@ -1256,60 +894,66 @@ describe("Device Authorization", () => {
     }
   )
 
-  it("fences concurrent resume to one Token POST and preserves the winner", async () => {
+  it("drops transport-unknown poll state and lets the next login issue a fresh Device", async () => {
     const harness = await createHarness()
     await issue(harness)
     harness.now.value += 5_000
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    harness.transport.enqueue(async (input) => {
-      const attempt = await harness.state.readDevicePollAttempt()
-      expect(attempt).toMatchObject({
-        phase: "dispatch_intent",
-        storageKind: "keychain",
+    harness.transport.enqueue(() =>
+      Promise.reject(new HttpTransportError("timeout", "timeout"))
+    )
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: false,
+        resume: true,
       })
-      expect(await harness.state.readTokenIndex()).toBeNull()
-      entered.resolve(undefined)
-      await release.promise
-      return response(input, 200, {
-        access_token: TOKEN,
-        token_type: "Bearer",
-        expires_in: 900,
-        activation_expires_at: "2026-07-31T02:10:00.000Z",
-        idle_expires_at: null,
-        absolute_expires_at: "2026-08-30T02:00:00.000Z",
-        credential_kind: "adrate_sliding_session",
+    ).rejects.toMatchObject({ exitCode: 5 })
+    expect(await harness.state.readDeviceState()).toBeNull()
+    expect(await harness.state.readDevicePollAttempt()).toBeNull()
+
+    enqueueDeviceCode(harness)
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: true,
+        resume: false,
+        deviceName: "fresh-device",
       })
+    ).resolves.toMatchObject({ exitCode: 0 })
+    expect(await harness.state.readDeviceState()).toMatchObject({
+      localState: "issued",
+      deviceName: "fresh-device",
     })
-    enqueueMe(harness)
+  })
 
-    const winner = harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await entered.promise
-    const loser = await peer.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    expect(loser.exitCode).toBe(4)
-    expect(peer.transport.requests).toHaveLength(0)
-
-    release.resolve(undefined)
-    expect((await winner).exitCode).toBe(0)
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      )
-    ).toHaveLength(1)
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "stored",
+  it("restarts from a poll staging record left by a stopped process", async () => {
+    const harness = await createHarness()
+    await issue(harness)
+    const previousDevice = (await harness.state.readDeviceState())!
+    await harness.state.writeDevicePollAttempt({
+      formatVersion: 1,
+      deviceGeneration: previousDevice.generation,
       storageKind: "keychain",
     })
+
+    enqueueDeviceCode(harness)
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: true,
+        resume: false,
+        deviceName: "restarted-device",
+      })
+    ).resolves.toMatchObject({ exitCode: 0 })
+
     expect(await harness.state.readDevicePollAttempt()).toBeNull()
+    expect(await harness.state.readDeviceState()).toMatchObject({
+      localState: "issued",
+      deviceName: "restarted-device",
+    })
+    expect((await harness.state.readDeviceState())?.generation).not.toBe(
+      previousDevice.generation
+    )
   })
 
   it("falls back only after a failed Keychain readiness probe is fully cleaned", async () => {
@@ -1320,7 +964,6 @@ describe("Device Authorization", () => {
       Promise.reject(new Error("Keychain is read-only"))
     harness.transport.enqueue(async (input) => {
       expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-        phase: "dispatch_intent",
         storageKind: "fallback_file",
       })
       return response(input, 200, {
@@ -1405,293 +1048,42 @@ describe("Device Authorization", () => {
     expect(await harness.state.readDevicePollAttempt()).toBeNull()
   })
 
-  it("lets only the poll owner persist authorization_pending", async () => {
+  it("drops an invalid Token response so logout can clear local transient state", async () => {
     const harness = await createHarness()
     await issue(harness)
     harness.now.value += 5_000
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    harness.transport.enqueue(async (input) => {
-      entered.resolve(undefined)
-      await release.promise
-      return response(input, 400, { error: "authorization_pending" })
-    })
-    const owner = harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await entered.promise
-    const contender = await peer.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    expect(contender.exitCode).toBe(4)
-    expect(peer.transport.requests).toHaveLength(0)
-    release.resolve(undefined)
-    expect((await owner).exitCode).toBe(4)
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "polling",
-      nextPollAt: "2026-07-31T02:00:10.000Z",
-    })
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-  })
-
-  it("lets only the poll owner clear an expired Device flow", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    harness.transport.enqueue(async (input) => {
-      entered.resolve(undefined)
-      await release.promise
-      return response(input, 400, { error: "expired_token" })
-    })
-    const owner = harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await entered.promise
-    const contender = await peer.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    expect(contender.exitCode).toBe(4)
-    expect(peer.transport.requests).toHaveLength(0)
-    release.resolve(undefined)
-    await expect(owner).rejects.toMatchObject({ exitCode: 3 })
+    harness.transport.enqueue((input) => response(input, 200, {}))
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: false,
+        resume: true,
+      })
+    ).rejects.toMatchObject({ exitCode: 5 })
     expect(await harness.state.readDeviceState()).toBeNull()
     expect(await harness.state.readDevicePollAttempt()).toBeNull()
-  })
-
-  it("recovers an abandoned dispatch intent as delivery_unknown without replay", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const lateResponse = gate<HttpResponse>()
-    harness.transport.enqueue((input) => {
-      entered.resolve(undefined)
-      return lateResponse.promise.then(() =>
-        response(input, 400, { error: "authorization_pending" })
-      )
-    })
-    const oldOwner = harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await entered.promise
-
-    harness.now.value += 46_000
-    await expect(
-      peer.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: {
-          details: { deliveryState: "delivery_unknown" },
-        },
-      },
-    })
-    expect(peer.transport.requests).toHaveLength(0)
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-    })
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-
-    lateResponse.resolve(
-      response(
-        {
-          method: "POST",
-          issuerOrigin: "https://api.adrate.io",
-          path: "/oauth/token",
-          deadlineMs: 15_000,
-        },
-        400,
-        { error: "authorization_pending" }
-      )
-    )
-    await expect(oldOwner).rejects.toMatchObject({ exitCode: 4 })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
+    await expect(harness.auth.logout(GLOBAL)).resolves.toMatchObject({
+      exitCode: 0,
+      envelope: { data: { localCredentialFound: false } },
     })
   })
 
-  it("fences delivery_unknown verification to one cross-process attempt", async () => {
+  it("lets logout clear poll staging left by a stopped process", async () => {
     const harness = await createHarness()
     await issue(harness)
-    harness.now.value += 5_000
-    harness.transport.enqueue(() =>
-      Promise.reject(new HttpTransportError("network", "lost"))
-    )
-    await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({ exitCode: 5 })
-    expect(
-      (await harness.state.readDeviceState())?.deliveryVerificationAttemptedAt
-    ).toBeNull()
-
-    harness.now.value += 5_000
-    harness.transport.enqueue(() =>
-      Promise.reject(new HttpTransportError("timeout", "lost"))
-    )
-    await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({ exitCode: 5 })
-    const afterVerification = await harness.state.readDeviceState()
-    expect(afterVerification?.deliveryVerificationAttemptedAt).toBe(
-      "2026-07-31T02:00:10.000Z"
-    )
-    expect(harness.transport.requests).toHaveLength(3)
-
-    harness.now.value += 60_000
-    await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({ exitCode: 5 })
-    expect(harness.transport.requests).toHaveLength(3)
-  })
-
-  it("stores the Token before /me and scrubs Device secrets", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    enqueueToken(harness)
-    enqueueMe(harness)
-    let acquiredDuringKeychainWrite = false
-    harness.keychain.onWrite = (address) =>
-      address.credentialId === CREDENTIAL_ID
-        ? harness.state.withAuthLock(async () => {
-            acquiredDuringKeychainWrite = true
-            expect(await harness.state.readTokenIndex()).toMatchObject({
-              state: "staging",
-              storageKind: "keychain",
-            })
-            expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-              phase: "dispatch_intent",
-              storageKind: "keychain",
-            })
-          })
-        : Promise.resolve()
-
-    const outcome = await harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
+    const device = (await harness.state.readDeviceState())!
+    await harness.state.writeDevicePollAttempt({
+      formatVersion: 1,
+      deviceGeneration: device.generation,
+      storageKind: "fallback_file",
     })
-    expect(outcome.exitCode).toBe(0)
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "stored",
-      credentialId: CREDENTIAL_ID,
-      storageKind: "keychain",
-    })
-    expect(await harness.state.readCredentials()).toMatchObject({
-      credentialId: CREDENTIAL_ID,
-      teamId: 7,
+
+    await expect(harness.auth.logout(GLOBAL)).resolves.toMatchObject({
+      exitCode: 0,
+      envelope: { data: { localCredentialFound: false } },
     })
     expect(await harness.state.readDeviceState()).toBeNull()
-    expect([...harness.keychain.values.values()]).toEqual([TOKEN])
-    expect(acquiredDuringKeychainWrite).toBe(true)
-  })
-
-  it("keeps a live staging owner fenced before and after lease expiry", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    enqueueToken(harness)
-    enqueueMe(harness)
-    const peer = createPeer(harness)
-    const enteredStorageCommit = gate<void>()
-    const releaseStorageCommit = gate<void>()
-    harness.keychain.onWrite = async (address) => {
-      if (address.issuerOrigin.endsWith(".invalid")) return
-      enteredStorageCommit.resolve(undefined)
-      await releaseStorageCommit.promise
-    }
-
-    const owner = harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await enteredStorageCommit.promise
-    const staging = await harness.state.readTokenIndex()
-    expect(staging).toMatchObject({
-      state: "staging",
-      storageCommit: {
-        ownerPid: harness.processIdentity.pid,
-        ownerProcessFingerprint: harness.processIdentity.fingerprint,
-      },
-    })
-    const protectedPaths = [
-      harness.state.paths.tokenIndex,
-      harness.state.paths.deviceCurrent,
-      harness.state.paths.devicePollAttempt,
-    ]
-    const identitiesBefore = await Promise.all(
-      protectedPaths.map(async (path) => {
-        const value = await stat(path)
-        return { ino: value.ino, mtimeMs: value.mtimeMs }
-      })
-    )
-
-    expect((await peer.auth.status(GLOBAL)).exitCode).toBe(4)
-    await expect(peer.auth.whoami(GLOBAL)).rejects.toMatchObject({
-      exitCode: 4,
-    })
-    await expect(
-      peer.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({ exitCode: 4 })
-    expect(peer.transport.requests).toHaveLength(0)
-
-    harness.now.value += 46_000
-    expect((await peer.auth.status(GLOBAL)).exitCode).toBe(4)
-    harness.processRegistry.denyProbe(harness.processIdentity)
-    await expect(peer.auth.whoami(GLOBAL)).rejects.toMatchObject({
-      exitCode: 4,
-    })
-    const identitiesAfter = await Promise.all(
-      protectedPaths.map(async (path) => {
-        const value = await stat(path)
-        return { ino: value.ino, mtimeMs: value.mtimeMs }
-      })
-    )
-    expect(identitiesAfter).toEqual(identitiesBefore)
-    expect(peer.transport.requests).toHaveLength(0)
-
-    releaseStorageCommit.resolve(undefined)
-    expect((await owner).exitCode).toBe(0)
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "stored",
-      storageCommit: null,
-    })
+    expect(await harness.state.readDevicePollAttempt()).toBeNull()
   })
 
   it("keeps a received Token when first /me is transiently unavailable", async () => {
@@ -1719,215 +1111,28 @@ describe("Device Authorization", () => {
       deviceCode: null,
       userCode: null,
     })
-  })
 
-  it("recovers a staging index with a durably stored Token", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    const device = (await harness.state.readDeviceState())!
-    const index: TokenIndex = {
-      tokenIndexFormatVersion: 1,
-      generation: TOKEN_GENERATION,
-      state: "staging",
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      credentialKind: "owner_cli_session",
-      credentialId: CREDENTIAL_ID,
-      clientInstanceId: device.clientInstanceId,
-      deviceGeneration: device.generation,
-      pollAttemptOwnerToken: POLL_OWNER_TOKEN,
-      deviceName: device.deviceName,
-      tokenReceivedAt: "2026-07-31T02:00:05.000Z",
-      storageKind: "keychain",
-      storageCommit: {
-        transactionId: "77777777-7777-4777-8777-777777777777",
-        ownerPid: harness.processIdentity.pid,
-        ownerProcessFingerprint: harness.processIdentity.fingerprint,
-        leaseExpiresAt: "2026-07-31T02:00:45.000Z",
-      },
-    }
-    await installStagingPollForIndex(harness, device, index)
-    await harness.keychain.write(
-      harness.local.credentials.addressFor(index),
-      TOKEN
-    )
-    let acquiredDuringRead = false
-    harness.keychain.onRead = () =>
-      harness.state.withAuthLock(() => {
-        acquiredDuringRead = true
-        return Promise.resolve()
-      })
-
-    harness.processRegistry.reuse(harness.processIdentity)
-    harness.now.value += 46_000
-    const recovered = await harness.local.inspectAndRecover()
-    expect(recovered).toMatchObject({
-      state: "located",
-      index: { state: "stored", credentialId: CREDENTIAL_ID },
-    })
-    expect(acquiredDuringRead).toBe(true)
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "token_received",
-      deviceCode: null,
-      userCode: null,
-    })
-  })
-
-  it("derives the warning from a fallback staging index during process recovery", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    const device = (await harness.state.readDeviceState())!
-    const index: TokenIndex = {
-      tokenIndexFormatVersion: 1,
-      generation: TOKEN_GENERATION,
-      state: "staging",
-      environment: device.environment,
-      issuerOrigin: device.issuerOrigin,
-      credentialKind: "owner_cli_session",
-      credentialId: CREDENTIAL_ID,
-      clientInstanceId: device.clientInstanceId,
-      deviceGeneration: device.generation,
-      pollAttemptOwnerToken: POLL_OWNER_TOKEN,
-      deviceName: device.deviceName,
-      tokenReceivedAt: "2026-07-31T02:00:05.000Z",
-      storageKind: "fallback_file",
-      storageCommit: {
-        transactionId: "77777777-7777-4777-8777-777777777777",
-        ownerPid: harness.processIdentity.pid,
-        ownerProcessFingerprint: harness.processIdentity.fingerprint,
-        leaseExpiresAt: "2026-07-31T02:00:45.000Z",
-      },
-    }
-    await installStagingPollForIndex(harness, device, index)
-    await harness.fallback.write(
-      harness.local.credentials.addressFor(index),
-      TOKEN
-    )
-    harness.processRegistry.reuse(harness.processIdentity)
-    harness.now.value += 46_000
     enqueueMe(harness)
-
-    const outcome = await harness.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-
-    expect(outcome.exitCode).toBe(0)
-    expect(outcome.warnings).toContain(
-      "OS Keychain is unavailable; using the protected local token file."
-    )
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "stored",
-      storageKind: "fallback_file",
-    })
-  })
-
-  it("preserves the fallback warning when finalization cannot be confirmed", async () => {
-    const harness = await createHarness()
-    harness.keychain.available = false
-    await issue(harness)
-    harness.now.value += 5_000
-    enqueueToken(harness)
-    harness.fallback.onRead = (address) =>
-      address.issuerOrigin.endsWith(".invalid")
-        ? Promise.resolve()
-        : Promise.reject(new Error("simulated finalize crash"))
-
     await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({
-      exitCode: 5,
-      warnings: [
-        "OS Keychain is unavailable; using the protected local token file.",
-      ],
+      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
+    ).resolves.toMatchObject({ exitCode: 0, envelope: { ok: true } })
+    expect(
+      harness.transport.requests.filter(
+        (request) => request.path === "/public/v1/sessions/current"
+      )
+    ).toHaveLength(0)
+    expect(await harness.state.readCredentials()).toMatchObject({
+      absoluteExpiresAt: "2026-08-30T02:00:00.000Z",
     })
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "staging",
-      storageKind: "fallback_file",
-    })
-  })
-
-  it("fences a staging crash with no stored Token as delivery_unknown", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    const device = (await harness.state.readDeviceState())!
-    const tokenReceivedAt = "2026-07-31T02:00:05.000Z"
-    await harness.state.withAuthLock(() =>
-      harness.state.writeTokenIndex({
-        tokenIndexFormatVersion: 1,
-        generation: TOKEN_GENERATION,
-        state: "staging",
-        environment: device.environment,
-        issuerOrigin: device.issuerOrigin,
-        credentialKind: "owner_cli_session",
-        credentialId: CREDENTIAL_ID,
-        clientInstanceId: device.clientInstanceId,
-        deviceGeneration: device.generation,
-        pollAttemptOwnerToken: POLL_OWNER_TOKEN,
-        deviceName: device.deviceName,
-        tokenReceivedAt,
-        storageKind: "keychain",
-        storageCommit: {
-          transactionId: "77777777-7777-4777-8777-777777777777",
-          ownerPid: 9_000,
-          ownerProcessFingerprint: "test-process:crashed",
-          leaseExpiresAt: "2026-07-31T02:00:45.000Z",
-        },
-      })
-    )
-
-    await expect(harness.local.inspectAndRecover()).rejects.toMatchObject({
-      exitCode: 4,
-      envelope: {
-        error: {
-          details: { localTransaction: "storage_commit_busy" },
-        },
-      },
-    })
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      state: "staging",
-    })
-    harness.now.value += 46_000
-    await expect(harness.local.inspectAndRecover()).rejects.toMatchObject({
-      exitCode: 5,
-    })
-    expect(await harness.state.readTokenIndex()).toBeNull()
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-      deliveryVerificationAttemptedAt: tokenReceivedAt,
-    })
-    const logout = await harness.auth.logout(GLOBAL)
-    expect(logout).toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: { details: { deliveryState: "delivery_unknown" } },
-      },
-    })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-      deliveryVerificationAttemptedAt: tokenReceivedAt,
-    })
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
-    ).rejects.toMatchObject({ exitCode: 2 })
   })
 })
 
-describe("crash-safe local authentication transactions", () => {
-  it("retries the frozen secret deletion after a crash before the phase CAS", async () => {
+describe("local authentication cleanup", () => {
+  it("retries exact secret deletion while the original identity is unchanged", async () => {
     const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
+    await installStoredCredential(harness, true)
+    const cleanup = new AuthCleanupCoordinator(harness.local)
     const expected = await harness.local.captureIdentity()
-    const requestCount = harness.transport.requests.length
     let injected = false
     harness.keychain.onRemove = (address) => {
       if (!injected && address.credentialId === CREDENTIAL_ID) {
@@ -1941,499 +1146,72 @@ describe("crash-safe local authentication transactions", () => {
     await expect(cleanup.clearIfUnchanged(expected)).rejects.toThrow(
       "simulated crash"
     )
-    expect(await harness.state.readAuthCleanupReservation()).toMatchObject({
-      phase: "prepared",
-      credentialLocator: {
-        credentialId: CREDENTIAL_ID,
-        storageKind: "keychain",
-      },
-    })
     expect(harness.keychain.values.size).toBe(0)
 
+    // 归一化只能确认本地 secret 已缺失，远端撤销状态仍是 unknown。
     await expect(
       harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
-    ).rejects.toMatchObject({ exitCode: 2 })
-    expect(harness.transport.requests).toHaveLength(requestCount)
+    ).resolves.toMatchObject({ exitCode: 5 })
 
     harness.keychain.onRemove = null
-    await expect(cleanup.clearIfUnchanged(expected)).resolves.toBe("cleared")
-    expect(await harness.state.readAuthCleanupReservation()).toBeNull()
+    // 状态已被归一化清理，identity 不再匹配
+    await expect(cleanup.clearIfUnchanged(expected)).resolves.toBe("stale")
     expect(await harness.state.readTokenIndex()).toBeNull()
   })
 
-  it("does not repeat secret deletion after secret_removed was durably written", async () => {
+  it("preserves a replacement credential when the expected identity is stale", async () => {
     const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
+    const index = await installStoredCredential(harness, true)
     const expected = await harness.local.captureIdentity()
-    const originalWrite = harness.state.writeAuthCleanupReservation.bind(
-      harness.state
-    )
-    let injected = false
-    harness.state.writeAuthCleanupReservation = async (reservation) => {
-      await originalWrite(reservation)
-      if (!injected && reservation.phase === "secret_removed") {
-        injected = true
-        throw new Error("simulated crash after phase CAS")
-      }
+    const replacement = {
+      ...index,
+      generation: "99999999-9999-4999-8999-999999999999",
     }
-
-    await expect(cleanup.clearIfUnchanged(expected)).rejects.toThrow(
-      "simulated crash"
-    )
-    expect(await harness.state.readAuthCleanupReservation()).toMatchObject({
-      phase: "secret_removed",
-    })
-    expect(harness.keychain.removes).toBe(1)
-
-    harness.state.writeAuthCleanupReservation = originalWrite
-    await expect(cleanup.clearIfUnchanged(expected)).resolves.toBe("cleared")
-    expect(harness.keychain.removes).toBe(1)
-  })
-
-  it.each([
-    "credentials",
-    "deviceCurrent",
-    "deviceIssueReservation",
-    "devicePollAttempt",
-    "tokenIndex",
-    "authCleanupReservation",
-  ] as const)(
-    "resumes pruning after a crash immediately after deleting %s",
-    async (pathKey) => {
-      const harness = await createHarness()
-      await installCompleteCleanupFixture(harness)
-      const cleanup = new AuthCleanupCoordinator(
-        harness.local,
-        () => new Date(harness.now.value)
-      )
-      const expected = await harness.local.captureIdentity()
-      const target = harness.state.paths[pathKey]
-      const fileSystem = harness.state.fileSystem
-      const originalRemove = fileSystem.removeSecureFile.bind(fileSystem)
-      let injected = false
-      fileSystem.removeSecureFile = async (path) => {
-        const removed = await originalRemove(path)
-        if (!injected && path === target) {
-          injected = true
-          throw new Error(`simulated crash after ${pathKey}`)
-        }
-        return removed
-      }
-
-      await expect(cleanup.clearIfUnchanged(expected)).rejects.toThrow(
-        "simulated crash"
-      )
-      fileSystem.removeSecureFile = originalRemove
-      const requestCount = harness.transport.requests.length
-      await expect(harness.auth.logout(GLOBAL)).resolves.toMatchObject({
-        exitCode: pathKey === "authCleanupReservation" ? 0 : 5,
-      })
-      expect(harness.transport.requests).toHaveLength(requestCount)
-
-      const final = await harness.state.withAuthLock(() =>
-        harness.local.readLocalSnapshotLocked()
-      )
-      expect(final).toMatchObject({
-        index: null,
-        metadata: null,
-        device: null,
-        issueReservation: null,
-        pollAttempt: null,
-        cleanupReservation: null,
-        fallbackExists: false,
-      })
-    }
-  )
-
-  it("resumes partial pruning with the original pre-cleanup identity", async () => {
-    const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
-    const expected = await harness.local.captureIdentity()
-    const fileSystem = harness.state.fileSystem
-    const originalRemove = fileSystem.removeSecureFile.bind(fileSystem)
-    let injected = false
-    fileSystem.removeSecureFile = async (path) => {
-      const removed = await originalRemove(path)
-      if (!injected && path === harness.state.paths.deviceCurrent) {
-        injected = true
-        throw new Error("simulated pruning crash")
-      }
-      return removed
-    }
-
-    await expect(cleanup.clearIfUnchanged(expected)).rejects.toThrow(
-      "simulated pruning crash"
-    )
-    fileSystem.removeSecureFile = originalRemove
-    await expect(cleanup.clearIfUnchanged(expected)).resolves.toBe("cleared")
-  })
-
-  it("does not turn an observed cleanup reservation into a new-generation cleanup after ABA", async () => {
-    const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
-    let injected = false
-    harness.keychain.onRemove = (address) => {
-      if (!injected && address.credentialId === CREDENTIAL_ID) {
-        injected = true
-        harness.keychain.values.delete(addressKey(address))
-        return Promise.reject(new Error("simulated cleanup pause"))
-      }
-      return Promise.resolve()
-    }
-    await expect(
-      cleanup.clearIfUnchanged(await harness.local.captureIdentity())
-    ).rejects.toThrow("simulated cleanup pause")
-    harness.keychain.onRemove = null
-    const observed = (await harness.state.readAuthCleanupReservation())!
-
-    const peerCleanup = new AuthCleanupCoordinator(
-      createPeer(harness).local,
-      () => new Date(harness.now.value)
-    )
-    await expect(peerCleanup.resumeExisting(observed)).resolves.toBe("cleared")
-    const replacement = await installStoredCredential(harness, true)
-    replacement.generation = "99999999-9999-4999-8999-999999999999"
     await harness.state.withAuthLock(() =>
       harness.state.writeTokenIndex(replacement)
     )
 
-    await expect(cleanup.resumeExisting(observed)).resolves.toBe("stale")
+    const cleanup = new AuthCleanupCoordinator(harness.local)
+    await expect(cleanup.clearIfUnchanged(expected)).resolves.toBe("stale")
     expect(await harness.state.readTokenIndex()).toMatchObject({
       generation: replacement.generation,
     })
     expect([...harness.keychain.values.values()]).toEqual([TOKEN])
   })
 
-  it("keeps a new fallback Token when an old cleanup resumes after three-party ABA", async () => {
+  it("clears remaining local records on explicit logout when the secret is already missing", async () => {
     const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const oldIndex = (await harness.state.readTokenIndex())!
-    const oldPoll = (await harness.state.readDevicePollAttempt())!
-    await harness.keychain.remove(
-      harness.local.credentials.addressFor(oldIndex)
-    )
-    const fallbackIndex: TokenIndex = {
-      ...oldIndex,
-      storageKind: "fallback_file",
-    }
-    await harness.state.withAuthLock(async () => {
-      await harness.state.writeTokenIndex(fallbackIndex)
-      await harness.state.writeDevicePollAttempt({
-        ...oldPoll,
-        storageKind: "fallback_file",
-      })
-    })
-    await harness.fallback.write(
-      harness.local.credentials.addressFor(fallbackIndex),
-      TOKEN
-    )
-
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
-    const entered = gate<void>()
-    const release = gate<void>()
-    const originalKeychainRemoval =
-      harness.local.credentials.removeKeychainAuthenticationArtifactAt.bind(
-        harness.local.credentials
-      )
-    let calls = 0
-    harness.local.credentials.removeKeychainAuthenticationArtifactAt = async (
-      locator
-    ) => {
-      calls += 1
-      await originalKeychainRemoval(locator)
-      if (calls === 1) {
-        entered.resolve(undefined)
-        await release.promise
-      }
-    }
-
-    const oldCleanup = cleanup.clearIfUnchanged(
-      await harness.local.captureIdentity()
-    )
-    await entered.promise
-    expect(harness.fallback.values.size).toBe(0)
-    const observed = (await harness.state.readAuthCleanupReservation())!
-    const peerCleanup = new AuthCleanupCoordinator(
-      createPeer(harness).local,
-      () => new Date(harness.now.value)
-    )
-    await expect(peerCleanup.resumeExisting(observed)).resolves.toBe("cleared")
-
-    const replacement = await installStoredCredential(harness, true)
-    await harness.keychain.remove(
-      harness.local.credentials.addressFor(replacement)
-    )
-    replacement.generation = "99999999-9999-4999-8999-999999999999"
-    replacement.storageKind = "fallback_file"
-    await harness.state.withAuthLock(() =>
-      harness.state.writeTokenIndex(replacement)
-    )
-    await harness.fallback.write(
-      harness.local.credentials.addressFor(replacement),
-      TOKEN
-    )
-
-    release.resolve(undefined)
-    await expect(oldCleanup).rejects.toMatchObject({ exitCode: 4 })
-    harness.local.credentials.removeKeychainAuthenticationArtifactAt =
-      originalKeychainRemoval
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      generation: replacement.generation,
-      storageKind: "fallback_file",
-    })
-    expect([...harness.fallback.values.values()]).toEqual([TOKEN])
-  })
-
-  it("resumes cleanup before normalizing an expired orphaned poll attempt", async () => {
-    const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
+    await installStoredCredential(harness, true)
+    const cleanup = new AuthCleanupCoordinator(harness.local)
+    const expected = await harness.local.captureIdentity()
     const fileSystem = harness.state.fileSystem
     const originalRemove = fileSystem.removeSecureFile.bind(fileSystem)
     let injected = false
     fileSystem.removeSecureFile = async (path) => {
       const removed = await originalRemove(path)
-      if (!injected && path === harness.state.paths.deviceCurrent) {
+      if (!injected && path === harness.state.paths.credentials) {
         injected = true
-        throw new Error("simulated crash after old Device delete")
+        throw new Error("simulated local cleanup interruption")
       }
       return removed
     }
 
-    await expect(
-      cleanup.clearIfUnchanged(await harness.local.captureIdentity())
-    ).rejects.toThrow("simulated crash")
-    fileSystem.removeSecureFile = originalRemove
-    harness.now.value += 60_000
-    const requestCount = harness.transport.requests.length
-
-    await expect(harness.auth.logout(GLOBAL)).resolves.toMatchObject({
-      exitCode: 5,
-    })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    expect(await harness.state.readAuthCleanupReservation()).toBeNull()
-  })
-
-  it("resumes cleanup before delivery_unknown remediation", async () => {
-    const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const device = (await harness.state.readDeviceState())!
-    const poll = (await harness.state.readDevicePollAttempt())!
-    const attemptedAt = "2026-07-31T02:00:02.000Z"
-    await harness.state.withAuthLock(async () => {
-      await harness.state.writeDeviceState({
-        ...device,
-        localState: "delivery_unknown",
-        deliveryVerificationAttemptedAt: attemptedAt,
-      })
-      await harness.state.writeDevicePollAttempt({
-        ...poll,
-        phase: "dispatch_intent",
-        deliveryVerification: true,
-        dispatchedAt: attemptedAt,
-        verificationClaimedAt: attemptedAt,
-      })
-    })
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
+    await expect(cleanup.clearIfUnchanged(expected)).rejects.toThrow(
+      "simulated local cleanup interruption"
     )
-    let injected = false
-    harness.keychain.onRemove = (address) => {
-      if (!injected && address.credentialId === CREDENTIAL_ID) {
-        injected = true
-        harness.keychain.values.delete(addressKey(address))
-        return Promise.reject(new Error("simulated crash after secret delete"))
-      }
-      return Promise.resolve()
-    }
-
-    await expect(
-      cleanup.clearIfUnchanged(await harness.local.captureIdentity())
-    ).rejects.toThrow("simulated crash")
-    harness.keychain.onRemove = null
+    fileSystem.removeSecureFile = originalRemove
     const requestCount = harness.transport.requests.length
-
     await expect(harness.auth.logout(GLOBAL)).resolves.toMatchObject({
       exitCode: 5,
       envelope: {
-        error: {
-          details: { resolutionEnvironment: "production" },
-        },
+        ok: false,
+        error: { details: { localStateCleared: true } },
       },
     })
     expect(harness.transport.requests).toHaveLength(requestCount)
-    expect(await harness.state.readDeviceState()).toBeNull()
-    expect(await harness.state.readAuthCleanupReservation()).toBeNull()
-  })
-
-  it("fails closed without deleting a different generation during pruning recovery", async () => {
-    const harness = await createHarness()
-    await installCompleteCleanupFixture(harness)
-    const cleanup = new AuthCleanupCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
+    await expect(harness.local.hasAnyAuthenticationArtifact()).resolves.toBe(
+      false
     )
-    const originalDevice = (await harness.state.readDeviceState())!
-    const fileSystem = harness.state.fileSystem
-    const originalRemove = fileSystem.removeSecureFile.bind(fileSystem)
-    let injected = false
-    fileSystem.removeSecureFile = async (path) => {
-      const removed = await originalRemove(path)
-      if (!injected && path === harness.state.paths.deviceCurrent) {
-        injected = true
-        throw new Error("simulated crash after old Device delete")
-      }
-      return removed
-    }
-    await expect(
-      cleanup.clearIfUnchanged(await harness.local.captureIdentity())
-    ).rejects.toThrow("simulated crash")
-    fileSystem.removeSecureFile = originalRemove
-
-    const replacementGeneration = "99999999-9999-4999-8999-999999999999"
-    await harness.state.withAuthLock(() =>
-      harness.state.writeDeviceState({
-        ...originalDevice,
-        generation: replacementGeneration,
-      })
-    )
-    await expect(
-      cleanup.clearIfUnchanged(await harness.local.captureIdentity())
-    ).rejects.toMatchObject({ exitCode: 4 })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      generation: replacementGeneration,
-    })
-  })
-
-  it.each(["device", "poll", "index"] as const)(
-    "recovers the staging no-token transaction after the %s step crashes",
-    async (crashStep) => {
-      const harness = await createHarness()
-      const { tokenReceivedAt } =
-        await installExpiredStagingWithoutToken(harness)
-      const originalWriteDevice = harness.state.writeDeviceState.bind(
-        harness.state
-      )
-      const originalClearPoll = harness.state.clearDevicePollAttempt.bind(
-        harness.state
-      )
-      const fileSystem = harness.state.fileSystem
-      const originalRemove = fileSystem.removeSecureFile.bind(fileSystem)
-      let injected = false
-      if (crashStep === "device") {
-        harness.state.writeDeviceState = async (device) => {
-          await originalWriteDevice(device)
-          if (!injected && device.localState === "delivery_unknown") {
-            injected = true
-            throw new Error("simulated staging Device crash")
-          }
-        }
-      } else if (crashStep === "poll") {
-        harness.state.clearDevicePollAttempt = async () => {
-          await originalClearPoll()
-          if (!injected) {
-            injected = true
-            throw new Error("simulated staging poll crash")
-          }
-        }
-      } else {
-        fileSystem.removeSecureFile = async (path) => {
-          const removed = await originalRemove(path)
-          if (!injected && path === harness.state.paths.tokenIndex) {
-            injected = true
-            throw new Error("simulated staging index crash")
-          }
-          return removed
-        }
-      }
-
-      await expect(harness.local.inspectAndRecover()).rejects.toThrow(
-        "simulated staging"
-      )
-      harness.state.writeDeviceState = originalWriteDevice
-      harness.state.clearDevicePollAttempt = originalClearPoll
-      fileSystem.removeSecureFile = originalRemove
-      expect(await harness.state.readDeviceState()).toMatchObject({
-        localState: "delivery_unknown",
-        deliveryVerificationAttemptedAt: tokenReceivedAt,
-      })
-
-      const before = harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      ).length
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        await expect(
-          harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-        ).rejects.toMatchObject({ exitCode: 5 })
-      }
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/oauth/token"
-        )
-      ).toHaveLength(before)
-      expect(await harness.state.readTokenIndex()).toBeNull()
-      expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    }
-  )
-
-  it("re-enters prepare when concurrent staging recovery removes the observed index", async () => {
-    const harness = await createHarness()
-    await installExpiredStagingWithoutToken(harness)
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    const originalInspect = peer.local.inspectAndRecover.bind(peer.local)
-    peer.local.inspectAndRecover = async () => {
-      entered.resolve(undefined)
-      await release.promise
-      return originalInspect()
-    }
-
-    const contender = peer.auth.login({
-      global: GLOBAL,
-      noWait: false,
-      resume: true,
-    })
-    await entered.promise
-    await expect(harness.local.inspectAndRecover()).rejects.toMatchObject({
-      exitCode: 5,
-    })
-    release.resolve(undefined)
-
-    await expect(contender).rejects.toMatchObject({ exitCode: 5 })
-    await expect(
-      createPeer(harness).auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-    ).rejects.toMatchObject({ exitCode: 5 })
-    expect(peer.transport.requests).toHaveLength(0)
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      )
-    ).toHaveLength(0)
   })
 
   it("lets real logout converge a stored Token crash after Device finalization", async () => {
@@ -2459,7 +1237,7 @@ describe("crash-safe local authentication transactions", () => {
       deviceCode: null,
     })
     expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      phase: "dispatch_intent",
+      storageKind: "keychain",
     })
     harness.transport.enqueue((input) =>
       response(input, 200, {
@@ -2486,543 +1264,6 @@ describe("crash-safe local authentication transactions", () => {
     ).toHaveLength(1)
     expect(await harness.state.readTokenIndex()).toBeNull()
     expect(await harness.state.readDevicePollAttempt()).toBeNull()
-  })
-
-  it.each(
-    (["ack_after_write", "device_before_clear"] as const).flatMap(
-      (crashPoint) =>
-        (
-          [
-            "authorization_pending",
-            "slow_down",
-            "temporarily_unavailable",
-            "oauth_error",
-            "invalid_slow_down",
-          ] as const
-        ).map((responseKind) => ({ crashPoint, responseKind }))
-    )
-  )(
-    "locally recovers $responseKind after $crashPoint without another Token POST",
-    async ({ crashPoint, responseKind }) => {
-      const harness = await createHarness()
-      await issue(harness)
-      await harness.state.withAuthLock(async () => {
-        const device = (await harness.state.readDeviceState())!
-        await harness.state.writeDeviceState({
-          ...device,
-          expiresAt: new Date(NOW + 2 * 86_400_000).toISOString(),
-        })
-      })
-      harness.now.value += 5_000
-      if (responseKind === "authorization_pending") {
-        harness.transport.enqueue((input) =>
-          response(input, 400, { error: responseKind })
-        )
-      } else if (responseKind === "slow_down") {
-        harness.transport.enqueue((input) =>
-          response(input, 400, { error: responseKind }, { "retry-after": "12" })
-        )
-      } else if (responseKind === "temporarily_unavailable") {
-        harness.transport.enqueue((input) =>
-          response(
-            input,
-            503,
-            { error: responseKind },
-            { "retry-after": "600" }
-          )
-        )
-      } else if (responseKind === "oauth_error") {
-        harness.transport.enqueue((input) =>
-          response(input, 400, { error: "invalid_scope" })
-        )
-      } else {
-        harness.transport.enqueue((input) =>
-          response(input, 400, { error: "slow_down" })
-        )
-      }
-
-      const originalWriteAttempt = harness.state.writeDevicePollAttempt.bind(
-        harness.state
-      )
-      const originalClearPoll = harness.state.clearDevicePollAttempt.bind(
-        harness.state
-      )
-      let injected = false
-      if (crashPoint === "ack_after_write") {
-        harness.state.writeDevicePollAttempt = async (attempt) => {
-          await originalWriteAttempt(attempt)
-          if (!injected && attempt.phase === "response_acknowledged") {
-            injected = true
-            throw new Error("simulated crash after response acknowledgement")
-          }
-        }
-      } else {
-        harness.state.clearDevicePollAttempt = () => {
-          if (!injected) {
-            injected = true
-            return Promise.reject(
-              new Error("simulated crash before acknowledged poll cleanup")
-            )
-          }
-          return originalClearPoll()
-        }
-      }
-
-      await expect(
-        harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-      ).rejects.toThrow("simulated crash")
-      harness.state.writeDevicePollAttempt = originalWriteAttempt
-      harness.state.clearDevicePollAttempt = originalClearPoll
-
-      const expectedInterval = responseKind === "slow_down" ? 12 : 5
-      const expectedDelay =
-        responseKind === "temporarily_unavailable" ? 600 : expectedInterval
-      const expectedResponseKind =
-        responseKind === "invalid_slow_down" ? "oauth_error" : responseKind
-      const expectedNextPollAt = new Date(
-        harness.now.value + expectedDelay * 1000
-      ).toISOString()
-      expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-        phase: "response_acknowledged",
-        responseAcknowledgement: {
-          responseKind: expectedResponseKind,
-          responseReceivedAt: "2026-07-31T02:00:05.000Z",
-          previousProtocolIntervalSeconds: 5,
-          protocolIntervalSeconds: expectedInterval,
-          retryAfterSeconds:
-            responseKind === "slow_down"
-              ? 12
-              : responseKind === "temporarily_unavailable"
-                ? 600
-                : null,
-          nextPollAt: expectedNextPollAt,
-        },
-      })
-
-      const restarted = createPeer(harness)
-      const recovered = restarted.auth.login({
-        global: GLOBAL,
-        noWait: false,
-        resume: true,
-      })
-      if (responseKind === "temporarily_unavailable") {
-        await expect(recovered).rejects.toMatchObject({
-          exitCode: 4,
-          envelope: {
-            error: {
-              details: {
-                oauthError: "temporarily_unavailable",
-                retryAfterSeconds: expectedDelay,
-              },
-            },
-          },
-        })
-      } else if (
-        responseKind === "oauth_error" ||
-        responseKind === "invalid_slow_down"
-      ) {
-        await expect(recovered).rejects.toMatchObject({
-          exitCode: 1,
-          envelope: {
-            error: { details: { responseKind: "oauth_error" } },
-          },
-        })
-      } else {
-        await expect(recovered).resolves.toMatchObject({
-          exitCode: 4,
-          envelope: {
-            error: { details: { oauthError: responseKind } },
-          },
-        })
-      }
-      expect(restarted.transport.requests).toHaveLength(0)
-      expect(await harness.state.readDevicePollAttempt()).toBeNull()
-      expect(await harness.state.readDeviceState()).toMatchObject({
-        localState: "polling",
-        intervalSeconds: expectedInterval,
-        nextPollAt: expectedNextPollAt,
-        deliveryVerificationAttemptedAt: null,
-      })
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/oauth/token"
-        )
-      ).toHaveLength(1)
-    }
-  )
-
-  it.each([
-    {
-      responseKind: "authorization_pending",
-      previousProtocolIntervalSeconds: 6,
-      protocolIntervalSeconds: 6,
-      retryAfterSeconds: null,
-      nextPollAt: "2026-07-31T02:00:11.000Z",
-    },
-    {
-      responseKind: "temporarily_unavailable",
-      previousProtocolIntervalSeconds: 5,
-      protocolIntervalSeconds: 5,
-      retryAfterSeconds: 600,
-      nextPollAt: "2026-07-31T02:10:05.000Z",
-    },
-    {
-      responseKind: "oauth_error",
-      previousProtocolIntervalSeconds: 6,
-      protocolIntervalSeconds: 6,
-      retryAfterSeconds: null,
-      nextPollAt: "2026-07-31T02:00:11.000Z",
-    },
-    {
-      responseKind: "slow_down",
-      previousProtocolIntervalSeconds: 6,
-      protocolIntervalSeconds: 11,
-      retryAfterSeconds: 3,
-      nextPollAt: "2026-07-31T02:00:16.000Z",
-    },
-  ] as const)(
-    "rejects an individually valid $responseKind acknowledgement whose previous interval conflicts with Device",
-    async (facts) => {
-      const harness = await createHarness()
-      await leaveAcknowledgedPollCrash(harness)
-      const attempt = (await harness.state.readDevicePollAttempt())!
-      await harness.state.writeDevicePollAttempt({
-        ...attempt,
-        responseAcknowledgement: {
-          responseKind: facts.responseKind,
-          responseReceivedAt: "2026-07-31T02:00:05.000Z",
-          previousProtocolIntervalSeconds:
-            facts.previousProtocolIntervalSeconds,
-          protocolIntervalSeconds: facts.protocolIntervalSeconds,
-          retryAfterSeconds: facts.retryAfterSeconds,
-          nextPollAt: facts.nextPollAt,
-        },
-      })
-      expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-        phase: "response_acknowledged",
-        responseAcknowledgement: {
-          responseKind: facts.responseKind,
-          previousProtocolIntervalSeconds:
-            facts.previousProtocolIntervalSeconds,
-        },
-      })
-
-      const restarted = createPeer(harness)
-      await expect(
-        restarted.auth.login({ global: GLOBAL, noWait: false, resume: true })
-      ).rejects.toMatchObject({
-        exitCode: 4,
-        envelope: { error: { code: "DEPENDENCY_UNAVAILABLE" } },
-      })
-      expect(restarted.transport.requests).toHaveLength(0)
-      expect(await harness.state.readDevicePollAttempt()).not.toBeNull()
-      expect(await harness.state.readDeviceState()).toMatchObject({
-        intervalSeconds: 5,
-        nextPollAt: "2026-07-31T02:00:10.000Z",
-      })
-    }
-  )
-
-  it.each([
-    ["status", 0],
-    ["whoami", 3],
-  ] as const)(
-    "settles response_acknowledged before real auth %s entry without another Token POST",
-    async (command, expectedExitCode) => {
-      const harness = await createHarness()
-      await leaveAcknowledgedPollCrash(harness)
-      const restarted = createPeer(harness)
-      const stdout = captureAcknowledgedStream()
-      const stderr = captureAcknowledgedStream()
-
-      const exitCode = await runCli(
-        createAuthCliApplication(restarted.auth),
-        ["auth", command, "--json"],
-        { stdout: stdout.stream, stderr: stderr.stream }
-      )
-
-      expect(exitCode).toBe(expectedExitCode)
-      expect(stdout.callbacks()).toBeGreaterThan(0)
-      expect(JSON.parse(stdout.read())).toMatchObject(
-        command === "status"
-          ? {
-              ok: true,
-              data: { status: "local_incomplete", reason: "token_missing" },
-            }
-          : { ok: false, error: { code: "INVALID_CREDENTIAL" } }
-      )
-      expect(restarted.transport.requests).toHaveLength(0)
-      expect(await harness.state.readDevicePollAttempt()).toBeNull()
-      expect(await harness.state.readDeviceState()).toMatchObject({
-        localState: "polling",
-        nextPollAt: "2026-07-31T02:00:10.000Z",
-      })
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/oauth/token"
-        )
-      ).toHaveLength(1)
-    }
-  )
-
-  it("keeps the dispatch fence when the process crashes before acknowledging a received response", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    harness.transport.enqueue((input) =>
-      response(input, 400, { error: "authorization_pending" })
-    )
-    const originalWriteAttempt = harness.state.writeDevicePollAttempt.bind(
-      harness.state
-    )
-    harness.state.writeDevicePollAttempt = (attempt) =>
-      attempt.phase === "response_acknowledged"
-        ? Promise.reject(
-            new Error("simulated crash before response acknowledgement")
-          )
-        : originalWriteAttempt(attempt)
-
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toThrow("simulated crash before response acknowledgement")
-    harness.state.writeDevicePollAttempt = originalWriteAttempt
-    expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      phase: "dispatch_intent",
-      responseAcknowledgement: null,
-    })
-
-    harness.now.value += 46_000
-    const restarted = createPeer(harness)
-    await expect(
-      restarted.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: { details: { deliveryState: "delivery_unknown" } },
-      },
-    })
-    expect(restarted.transport.requests).toHaveLength(0)
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-    })
-  })
-
-  it("stops interactive login after locally recovering an acknowledged response", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    harness.transport.enqueue((input) =>
-      response(input, 400, { error: "authorization_pending" })
-    )
-    const originalWriteAttempt = harness.state.writeDevicePollAttempt.bind(
-      harness.state
-    )
-    harness.state.writeDevicePollAttempt = async (attempt) => {
-      await originalWriteAttempt(attempt)
-      if (attempt.phase === "response_acknowledged") {
-        throw new Error("simulated interactive acknowledgement crash")
-      }
-    }
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toThrow("simulated interactive acknowledgement crash")
-    harness.state.writeDevicePollAttempt = originalWriteAttempt
-
-    // 即使崩溃恢复时冻结的 nextPollAt 已经过期，本次交互式
-    // login 也只完成本地提交，不在同一调用的等待循环里再发 POST。
-    harness.now.value += 60_000
-    const restarted = createPeer(harness)
-    const outcome = await restarted.auth.login({
-      global: { ...GLOBAL, noInput: false },
-      noWait: false,
-      resume: false,
-    })
-    expect(outcome.exitCode).toBe(4)
-    expect(restarted.transport.requests).toHaveLength(0)
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "polling",
-      nextPollAt: "2026-07-31T02:00:10.000Z",
-    })
-  })
-
-  it("does not downgrade delivery_unknown after an acknowledged verification response", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    harness.transport.enqueue(() =>
-      Promise.reject(new HttpTransportError("network", "lost response"))
-    )
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({ exitCode: 5 })
-
-    harness.now.value += 5_000
-    harness.transport.enqueue((input) =>
-      response(input, 400, { error: "authorization_pending" })
-    )
-    const originalWriteAttempt = harness.state.writeDevicePollAttempt.bind(
-      harness.state
-    )
-    harness.state.writeDevicePollAttempt = async (attempt) => {
-      await originalWriteAttempt(attempt)
-      if (attempt.phase === "response_acknowledged") {
-        throw new Error("simulated verification acknowledgement crash")
-      }
-    }
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toThrow("simulated verification acknowledgement crash")
-    harness.state.writeDevicePollAttempt = originalWriteAttempt
-    expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      phase: "response_acknowledged",
-      deliveryVerification: true,
-      responseAcknowledgement: {
-        responseKind: "authorization_pending",
-      },
-    })
-
-    const restarted = createPeer(harness)
-    await expect(
-      restarted.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: {
-          details: {
-            deliveryState: "delivery_unknown",
-            safeRestartAt: "2026-07-31T02:10:25.000Z",
-          },
-        },
-      },
-    })
-    expect(restarted.transport.requests).toHaveLength(0)
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-      deliveryVerificationAttemptedAt: "2026-07-31T02:00:10.000Z",
-    })
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      )
-    ).toHaveLength(2)
-  })
-
-  it("recovers an acknowledged 86400-second backoff and continues ordinary pending/temporary rounds", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    await harness.state.withAuthLock(async () => {
-      const device = (await harness.state.readDeviceState())!
-      await harness.state.writeDeviceState({
-        ...device,
-        expiresAt: new Date(NOW + 4 * 86_400_000).toISOString(),
-      })
-    })
-    harness.now.value += 5_000
-    harness.transport.enqueue((input) =>
-      response(
-        input,
-        503,
-        { error: "temporarily_unavailable" },
-        { "retry-after": "86400" }
-      )
-    )
-    const originalClearPoll = harness.state.clearDevicePollAttempt.bind(
-      harness.state
-    )
-    harness.state.clearDevicePollAttempt = () =>
-      Promise.reject(new Error("simulated crash after backoff write"))
-
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toThrow("simulated crash after backoff write")
-    harness.state.clearDevicePollAttempt = originalClearPoll
-    const backoffBoundary = NOW + 5_000 + 86_400_000
-    expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      phase: "response_acknowledged",
-      responseAcknowledgement: {
-        responseKind: "temporarily_unavailable",
-        responseReceivedAt: "2026-07-31T02:00:05.000Z",
-        previousProtocolIntervalSeconds: 5,
-        protocolIntervalSeconds: 5,
-        retryAfterSeconds: 86_400,
-        nextPollAt: new Date(backoffBoundary).toISOString(),
-      },
-    })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "polling",
-      nextPollAt: new Date(backoffBoundary).toISOString(),
-    })
-
-    harness.now.value += 46_000
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({
-      exitCode: 4,
-      envelope: {
-        error: {
-          details: {
-            oauthError: "temporarily_unavailable",
-            retryAfterSeconds: 86_354,
-          },
-        },
-      },
-    })
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "polling",
-      nextPollAt: new Date(backoffBoundary).toISOString(),
-    })
-    harness.now.value = backoffBoundary - 1
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).resolves.toMatchObject({ exitCode: 4 })
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      )
-    ).toHaveLength(1)
-
-    harness.now.value = backoffBoundary
-    harness.transport.enqueue((input) =>
-      response(input, 400, { error: "authorization_pending" })
-    )
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).resolves.toMatchObject({ exitCode: 4 })
-
-    harness.now.value = backoffBoundary + 5_000
-    harness.transport.enqueue((input) =>
-      response(
-        input,
-        503,
-        { error: "temporarily_unavailable" },
-        { "retry-after": "86400" }
-      )
-    )
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({ exitCode: 4 })
-
-    const secondBackoffBoundary = backoffBoundary + 5_000 + 86_400_000
-    harness.now.value = secondBackoffBoundary
-    harness.transport.enqueue((input) =>
-      response(input, 400, { error: "authorization_pending" })
-    )
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).resolves.toMatchObject({ exitCode: 4 })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "polling",
-      intervalSeconds: 5,
-      nextPollAt: new Date(secondBackoffBoundary + 5_000).toISOString(),
-    })
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/oauth/token"
-      )
-    ).toHaveLength(4)
   })
 
   it("recovers a Device issue crash after Device write and before reservation cleanup", async () => {
@@ -3054,7 +1295,7 @@ describe("crash-safe local authentication transactions", () => {
         noWait: false,
         resume: true,
       })
-    ).rejects.toMatchObject({ exitCode: 2 })
+    ).resolves.toMatchObject({ exitCode: 4 })
     harness.now.value += 46_000
     harness.transport.enqueue((input) =>
       response(input, 400, { error: "authorization_pending" })
@@ -3070,334 +1311,38 @@ describe("crash-safe local authentication transactions", () => {
     ).toHaveLength(1)
   })
 
-  it.each([false, true])(
-    "fails closed before mutating a staging transaction with mismatched full poll binding (token=%s)",
-    async (tokenPresent) => {
-      const harness = await createHarness()
-      await installExpiredStagingWithoutToken(harness)
-      const index = (await harness.state.readTokenIndex())!
-      if (tokenPresent) {
-        await harness.keychain.write(
-          harness.local.credentials.addressFor(index),
-          TOKEN
-        )
-      }
-      const originalDevice = await harness.state.readDeviceState()
-      const poll = (await harness.state.readDevicePollAttempt())!
-      await harness.state.withAuthLock(() =>
-        harness.state.writeDevicePollAttempt({
-          ...poll,
-          ownerProcessFingerprint: "test-process:replacement",
-        })
-      )
-
-      await expect(harness.local.inspectAndRecover()).resolves.toMatchObject({
-        state: "local_incomplete",
-        reason: "metadata_mismatch",
-      })
-      expect(await harness.state.readDeviceState()).toEqual(originalDevice)
-      expect(await harness.state.readTokenIndex()).toMatchObject({
-        state: "staging",
-      })
-      expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-        ownerProcessFingerprint: "test-process:replacement",
-      })
-    }
-  )
-
-  it.each(["pending", "terminal", "token", "network"] as const)(
-    "preserves dispatch evidence when the clock rolls back during a %s response",
-    async (responseKind) => {
-      const harness = await createHarness()
-      await issue(harness)
-      harness.now.value += 5_000
-      harness.transport.enqueue((input) => {
-        harness.now.value -= 1_000
-        if (responseKind === "network") {
-          throw new HttpTransportError("timeout", "clock rollback")
-        }
-        if (responseKind === "pending") {
-          return response(input, 400, { error: "authorization_pending" })
-        }
-        if (responseKind === "terminal") {
-          return response(input, 400, { error: "expired_token" })
-        }
-        return response(input, 200, {
-          access_token: TOKEN,
-          token_type: "Bearer",
-          expires_in: 900,
-          activation_expires_at: "2026-07-31T02:10:00.000Z",
-          idle_expires_at: null,
-          absolute_expires_at: "2026-08-30T02:00:00.000Z",
-          credential_kind: "adrate_sliding_session",
-        })
-      })
-
-      await expect(
-        harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-      ).rejects.toMatchObject({ exitCode: 5 })
-      expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-        phase: "dispatch_intent",
-        dispatchedAt: "2026-07-31T02:00:05.000Z",
-      })
-      expect(await harness.state.readTokenIndex()).toBeNull()
-      expect(await harness.state.readDeviceState()).toMatchObject({
-        localState: "polling",
-        terminalEvidence: null,
-      })
-    }
-  )
-
-  it.each(["terminal_device", "poll", "device"] as const)(
-    "converges terminal completion after the %s crash point with concurrent natural entries",
-    async (crashStep) => {
-      const harness = await createHarness()
-      await issue(harness)
-      harness.now.value += 5_000
-      harness.transport.enqueue((input) =>
-        response(input, 400, { error: "expired_token" })
-      )
-      const originalWriteDevice = harness.state.writeDeviceState.bind(
-        harness.state
-      )
-      const originalClearPoll = harness.state.clearDevicePollAttempt.bind(
-        harness.state
-      )
-      const originalClearDevice = harness.state.clearDeviceState.bind(
-        harness.state
-      )
-      let injected = false
-      if (crashStep === "terminal_device") {
-        harness.state.writeDeviceState = async (device) => {
-          await originalWriteDevice(device)
-          if (!injected && device.localState === "terminal") {
-            injected = true
-            throw new Error("simulated terminal Device crash")
-          }
-        }
-      } else if (crashStep === "poll") {
-        harness.state.clearDevicePollAttempt = async () => {
-          await originalClearPoll()
-          if (!injected) {
-            injected = true
-            throw new Error("simulated terminal poll crash")
-          }
-        }
-      } else {
-        harness.state.clearDeviceState = async () => {
-          await originalClearDevice()
-          if (!injected) {
-            injected = true
-            throw new Error("simulated terminal delete crash")
-          }
-        }
-      }
-
-      await expect(
-        harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-      ).rejects.toThrow("simulated terminal")
-      harness.state.writeDeviceState = originalWriteDevice
-      harness.state.clearDevicePollAttempt = originalClearPoll
-      harness.state.clearDeviceState = originalClearDevice
-
-      const statusPeer = createPeer(harness)
-      const logoutPeer = createPeer(harness)
-      const concurrent = await Promise.allSettled([
-        statusPeer.auth.status(GLOBAL),
-        logoutPeer.auth.logout(GLOBAL),
-      ])
-      expect(
-        concurrent.some(
-          (result) =>
-            result.status === "fulfilled" && result.value.exitCode === 0
-        )
-      ).toBe(true)
-      expect((await createPeer(harness).auth.status(GLOBAL)).exitCode).toBe(0)
-      expect((await createPeer(harness).auth.logout(GLOBAL)).exitCode).toBe(0)
-      await expect(
-        createPeer(harness).auth.login({
-          global: GLOBAL,
-          noWait: false,
-          resume: true,
-        })
-      ).rejects.toMatchObject({ exitCode: 3 })
-      expect(statusPeer.transport.requests).toHaveLength(0)
-      expect(logoutPeer.transport.requests).toHaveLength(0)
-      expect(await harness.state.readDeviceState()).toBeNull()
-      expect(await harness.state.readDevicePollAttempt()).toBeNull()
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/oauth/token"
-        )
-      ).toHaveLength(1)
-    }
-  )
-
-  it("preserves terminal evidence when a different nonnull poll attempt appears", async () => {
-    const harness = await createHarness()
-    await installTerminalCrashState(harness)
-    const terminal = (await harness.state.readDeviceState())!
-    const frozenAttempt = terminal.terminalEvidence!.attempt
-    const replacementOwner = "99999999-9999-4999-8999-999999999999"
-    await harness.state.withAuthLock(() =>
-      harness.state.writeDevicePollAttempt({
-        ...frozenAttempt,
-        ownerToken: replacementOwner,
-      })
-    )
-    const requestCount = harness.transport.requests.length
-
-    const pendingStatus = await harness.auth.status(GLOBAL)
-    expect(pendingStatus).toMatchObject({
-      exitCode: 0,
-      envelope: {
-        data: { status: "local_incomplete", reason: "metadata_mismatch" },
-      },
-    })
-    expect(pendingStatus.envelope.ok).toBe(true)
-    if (pendingStatus.envelope.ok) {
-      expect(Object.keys(pendingStatus.envelope.data).sort()).toEqual(
-        [
-          "status",
-          "authenticated",
-          "issuerOrigin",
-          "credentialKind",
-          "credentialId",
-          "team",
-          "credential",
-          "reason",
-        ].sort()
-      )
-    }
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({ exitCode: 2 })
-    expect(await harness.state.readDeviceState()).toEqual(terminal)
-    expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      ownerToken: replacementOwner,
-    })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-  })
-
-  it("settles terminal evidence before resolving process identity", async () => {
-    const harness = await createHarness()
-    await installTerminalCrashState(harness)
-    harness.local.storageCommitProcessIdentity = () =>
-      Promise.reject(new Error("process probe unavailable"))
-    const coordinator = new DevicePollCoordinator(
-      harness.local,
-      () => new Date(harness.now.value)
-    )
-
-    await expect(coordinator.prepare()).rejects.toMatchObject({ exitCode: 3 })
-    expect(await harness.state.readDeviceState()).toBeNull()
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-  })
-
-  it("recovers the exact verification claim time after attempt-to-Device crash", async () => {
+  it("drops a stale staging record from another Device generation", async () => {
     const harness = await createHarness()
     await issue(harness)
-    await harness.state.withAuthLock(async () => {
-      const device = (await harness.state.readDeviceState())!
-      await harness.state.writeDeviceState({
-        ...device,
-        localState: "delivery_unknown",
-      })
-    })
     harness.now.value += 5_000
+    const device = (await harness.state.readDeviceState())!
+    const attempt: DevicePollAttempt = {
+      formatVersion: 1,
+      deviceGeneration: "99999999-9999-4999-8999-999999999999",
+      storageKind: "keychain",
+    }
+    await harness.state.withAuthLock(() =>
+      harness.state.writeDevicePollAttempt(attempt)
+    )
     const coordinator = new DevicePollCoordinator(
       harness.local,
       () => new Date(harness.now.value)
     )
-    const preparation = await coordinator.prepare()
-    expect(preparation.kind).toBe("select_backend")
-    if (preparation.kind !== "select_backend") throw new Error("unreachable")
-    const frozen = await coordinator.freezeBackend(preparation)
-    harness.now.value += 60_000
-    const claimedAt = new Date(harness.now.value).toISOString()
-    const originalWriteDevice = harness.state.writeDeviceState.bind(
-      harness.state
-    )
-    harness.state.writeDeviceState = () =>
-      Promise.reject(new Error("simulated crash before Device timestamp"))
 
-    await expect(coordinator.markDispatchIntent(frozen)).rejects.toThrow(
-      "simulated crash"
-    )
-    harness.state.writeDeviceState = originalWriteDevice
-    expect(await harness.state.readDevicePollAttempt()).toMatchObject({
-      phase: "dispatch_intent",
-      createdAt: "2026-07-31T02:00:05.000Z",
-      dispatchedAt: claimedAt,
-      verificationClaimedAt: claimedAt,
+    await expect(coordinator.prepare()).resolves.toMatchObject({
+      kind: "select_backend",
+    })
+    expect(await harness.state.readDevicePollAttempt()).toEqual({
+      formatVersion: 1,
+      deviceGeneration: device.generation,
+      storageKind: null,
     })
     expect(
-      (await harness.state.readDeviceState())?.deliveryVerificationAttemptedAt
-    ).toBeNull()
-
-    harness.now.value += 46_000
-    const recovered = await coordinator.prepare()
-    expect(recovered).toEqual({
-      kind: "recovered_unknown",
-      safeRestartAt: "2026-07-31T02:11:20.000Z",
-    })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-      nextPollAt: "2026-07-31T02:01:10.000Z",
-      deliveryVerificationAttemptedAt: claimedAt,
-    })
+      harness.transport.requests.filter(
+        (request) => request.path === "/oauth/token"
+      )
+    ).toHaveLength(0)
   })
-
-  it.each(["generation", "client", "issuer"] as const)(
-    "preserves an expired mismatched dispatch intent for %s mismatch",
-    async (mismatchKind) => {
-      const harness = await createHarness()
-      await issue(harness)
-      const device = (await harness.state.readDeviceState())!
-      const attempt: DevicePollAttempt = {
-        formatVersion: 1,
-        ownerToken: POLL_OWNER_TOKEN,
-        deviceGeneration:
-          mismatchKind === "generation"
-            ? "99999999-9999-4999-8999-999999999999"
-            : device.generation,
-        environment: mismatchKind === "issuer" ? "test" : device.environment,
-        issuerOrigin:
-          mismatchKind === "issuer"
-            ? "https://api.test.adrate.io"
-            : device.issuerOrigin,
-        clientInstanceId:
-          mismatchKind === "client"
-            ? "88888888-8888-4888-8888-888888888888"
-            : device.clientInstanceId,
-        phase: "dispatch_intent",
-        deliveryVerification: false,
-        storageKind: "keychain",
-        ownerPid: 9_000,
-        ownerProcessFingerprint: "test-process:crashed",
-        createdAt: "2026-07-31T01:59:00.000Z",
-        dispatchedAt: "2026-07-31T01:59:00.000Z",
-        verificationClaimedAt: null,
-        responseAcknowledgement: null,
-        leaseExpiresAt: "2026-07-31T01:59:45.000Z",
-      }
-      await harness.state.withAuthLock(() =>
-        harness.state.writeDevicePollAttempt(attempt)
-      )
-      const coordinator = new DevicePollCoordinator(
-        harness.local,
-        () => new Date(harness.now.value)
-      )
-
-      await expect(coordinator.prepare()).rejects.toMatchObject({ exitCode: 4 })
-      expect(await harness.state.readDevicePollAttempt()).toEqual(attempt)
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/oauth/token"
-        )
-      ).toHaveLength(0)
-    }
-  )
 })
 
 describe("auth status and logout", () => {
@@ -3433,7 +1378,7 @@ describe("auth status and logout", () => {
     expect(harness.transport.requests).toHaveLength(0)
   })
 
-  it("uses the residual test issuer for incomplete-state logout recovery", async () => {
+  it("clears residual test state when the indexed secret is missing", async () => {
     const harness = await createHarness()
     const config = await harness.state.ensureConfig("test")
     await harness.state.writeTokenIndex({
@@ -3446,11 +1391,9 @@ describe("auth status and logout", () => {
       credentialId: CREDENTIAL_ID,
       clientInstanceId: config.clientInstanceId,
       deviceGeneration: DEVICE_GENERATION,
-      pollAttemptOwnerToken: POLL_OWNER_TOKEN,
       deviceName: "test-device",
       tokenReceivedAt: "2026-07-31T02:00:00.000Z",
       storageKind: "keychain",
-      storageCommit: null,
     })
 
     const outcome = await harness.auth.logout(GLOBAL)
@@ -3461,7 +1404,8 @@ describe("auth status and logout", () => {
         ok: false,
         error: {
           details: {
-            resolutionUrl: "https://test.adrate.io/settings/security",
+            reason: "token_missing",
+            localStateCleared: true,
           },
         },
       },
@@ -3471,11 +1415,11 @@ describe("auth status and logout", () => {
   })
 
   it.each([
-    ["production", "test", "https://test.adrate.io/settings/security"],
-    ["test", "production", "https://app.adrate.io/settings/security"],
+    ["production", "test"],
+    ["test", "production"],
   ] as const)(
     "uses credential index %s evidence ahead of opposite %s config",
-    async (configEnvironment, indexEnvironment, resolutionUrl) => {
+    async (configEnvironment, indexEnvironment) => {
       const harness = await createHarness()
       const config = await harness.state.ensureConfig(configEnvironment)
       await harness.state.writeTokenIndex({
@@ -3491,11 +1435,9 @@ describe("auth status and logout", () => {
         credentialId: CREDENTIAL_ID,
         clientInstanceId: config.clientInstanceId,
         deviceGeneration: DEVICE_GENERATION,
-        pollAttemptOwnerToken: POLL_OWNER_TOKEN,
         deviceName: "conflicting-config",
         tokenReceivedAt: "2026-07-31T02:00:00.000Z",
         storageKind: "keychain",
-        storageCommit: null,
       })
 
       const outcome = await harness.auth.logout(GLOBAL)
@@ -3503,11 +1445,15 @@ describe("auth status and logout", () => {
         exitCode: 5,
         envelope: {
           error: {
-            details: { resolutionEnvironment: indexEnvironment, resolutionUrl },
+            details: {
+              reason: "metadata_mismatch",
+              localStatePreserved: true,
+            },
           },
         },
       })
       expect(harness.transport.requests).toHaveLength(0)
+      expect(await harness.state.readTokenIndex()).not.toBeNull()
     }
   )
 
@@ -3522,18 +1468,7 @@ describe("auth status and logout", () => {
     )
 
     const outcome = await harness.auth.logout(GLOBAL)
-    expect(outcome).toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: {
-          details: {
-            resolutionEnvironment: "unknown",
-            suggestedAction: "confirm_environment",
-            environmentConfirmationRequired: true,
-          },
-        },
-      },
-    })
+    expect(outcome.exitCode).toBe(5)
     expect(outcome.envelope.ok).toBe(false)
     if (!outcome.envelope.ok) {
       expect(outcome.envelope.error.details.resolutionUrl).toBeNull()
@@ -3652,13 +1587,12 @@ describe("auth status and logout", () => {
     )
     const unverified = await malformedStatus.auth.status(GLOBAL)
     expect(unverified).toMatchObject({
-      exitCode: 4,
+      exitCode: 0,
       envelope: {
-        error: {
-          details: {
-            authStatus: "unverified",
-            responseKind: "me_contract_invalid",
-          },
+        ok: true,
+        data: {
+          status: "local_incomplete",
+          reason: "metadata_mismatch",
         },
       },
     })
@@ -3767,18 +1701,20 @@ describe("auth status and logout", () => {
           indexBeforeResponse ??= await harness.state.readTokenIndex()
         },
       })
-      const stdout = captureAcknowledgedStream()
-      const stderr = captureAcknowledgedStream()
 
-      const exitCode = await runCli(
-        createAuthCliApplication(harness.auth),
-        argv,
-        { stdout: stdout.stream, stderr: stderr.stream }
-      )
+      const outcome = (await (command === "status"
+        ? harness.auth.status(GLOBAL)
+        : command === "whoami"
+          ? harness.auth.whoami(GLOBAL)
+          : harness.auth.login({
+              global: GLOBAL,
+              noWait: false,
+              resume: true,
+            })
+      ).catch((error: unknown) => error)) as CliOutcome | CliFailure
 
-      expect(exitCode).toBe(4)
-      expect(stdout.callbacks()).toBe(1)
-      expect(JSON.parse(stdout.read())).toMatchObject({
+      expect(outcome.exitCode).toBe(4)
+      expect(outcome.envelope).toMatchObject({
         ok: false,
         error: {
           code: "DEPENDENCY_UNAVAILABLE",
@@ -3827,13 +1763,11 @@ describe("auth status and logout", () => {
 
     const outcome = await harness.auth.logout(GLOBAL)
     expect(outcome).toMatchObject({
-      exitCode: 4,
-      retryAfterSeconds: 17,
+      exitCode: 5,
       envelope: { meta: { pendingCommandsRetained: 1 } },
       warnings: [
-        "Retry after 17 second(s) before repeating this request.",
-        "Credential expires soon.",
         "1 pending Command record(s) were preserved. A new credential cannot resume Commands created by the previous credential.",
+        "Remote revocation is not confirmed. Verify or revoke the device on the official Web security page.",
       ],
     })
     expect(new Set(outcome.warnings).size).toBe(outcome.warnings.length)
@@ -3847,11 +1781,10 @@ describe("auth status and logout", () => {
     )
     expect(stdout.read()).toBe("")
     expect(stderr.read()).toContain(
-      "Warning: Retry after 17 second(s) before repeating this request."
-    )
-    expect(stderr.read()).toContain("Warning: Credential expires soon.")
-    expect(stderr.read()).toContain(
       "Warning: 1 pending Command record(s) were preserved."
+    )
+    expect(stderr.read()).toContain(
+      "Warning: Remote revocation is not confirmed."
     )
   })
 
@@ -3887,172 +1820,11 @@ describe("auth status and logout", () => {
     ).toHaveLength(1)
   })
 
-  it("replays an unacknowledged unknown logout with zero repeated DELETE and gates every auth entry", async () => {
-    const harness = await createHarness()
-    await installStoredCredential(harness, true)
-    harness.transport.enqueue(() =>
-      Promise.reject(
-        new HttpTransportError("timeout", "server-secret-body-marker")
-      )
-    )
-
-    const first = await harness.auth.logout(GLOBAL)
-    expect(first.exitCode).toBe(5)
-    expect(
-      harness.transport.requests.filter(
-        (request) => request.path === "/public/v1/sessions/current"
-      )
-    ).toHaveLength(1)
-    expect(await harness.state.readLogoutDeliveryJournal()).toMatchObject({
-      phase: "outcome_recorded",
-      remoteOutcome: "unknown",
-      reason: "transport_unknown",
-    })
-    const journalText = await readFile(
-      harness.state.paths.logoutDeliveryJournal,
-      "utf8"
-    )
-    expect(journalText).not.toContain(TOKEN)
-    expect(journalText).not.toContain("server-secret-body-marker")
-    expect(
-      (await stat(harness.state.paths.logoutDeliveryJournal)).mode & 0o777
-    ).toBe(0o600)
-
-    const requestCount = harness.transport.requests.length
-    await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: true,
-        resume: false,
-      })
-    ).rejects.toMatchObject({ exitCode: 3 })
-    await expect(harness.auth.whoami(GLOBAL)).rejects.toMatchObject({
-      exitCode: 3,
-    })
-    const logoutPendingStatus = await harness.auth.status(GLOBAL)
-    expect(logoutPendingStatus).toMatchObject({
-      exitCode: 0,
-      envelope: {
-        data: {
-          status: "local_incomplete",
-          reason: "metadata_mismatch",
-        },
-      },
-    })
-    expect(logoutPendingStatus.envelope.ok).toBe(true)
-    if (logoutPendingStatus.envelope.ok) {
-      expect(Object.keys(logoutPendingStatus.envelope.data).sort()).toEqual(
-        [
-          "status",
-          "authenticated",
-          "issuerOrigin",
-          "credentialKind",
-          "credentialId",
-          "team",
-          "credential",
-          "reason",
-        ].sort()
-      )
-    }
-    expect(harness.transport.requests).toHaveLength(requestCount)
-
-    const replay = await harness.auth.logout(GLOBAL)
-    expect(replay.exitCode).toBe(5)
-    expect(harness.transport.requests).toHaveLength(requestCount)
-    expect(replay.postRenderAcknowledgement).toBeDefined()
-    await replay.postRenderAcknowledgement!.acknowledge()
-    expect(await harness.state.readLogoutDeliveryJournal()).toBeNull()
-
-    enqueueDeviceCode(harness)
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
-    ).resolves.toMatchObject({ exitCode: 0 })
-  })
-
-  it.each([
-    ["before_delete", "dispatch_intent", 0, 5],
-    ["before_outcome_record", "dispatch_intent", 1, 5],
-    ["after_outcome_record", "outcome_recorded", 1, 0],
-  ] as const)(
-    "recovers logout crash %s without repeating DELETE",
-    async (crashPoint, expectedPhase, expectedDeletes, replayExitCode) => {
-      const harness = await createHarness()
-      await installStoredCredential(harness, true)
-      harness.transport.enqueue((input) =>
-        response(input, 200, {
-          ok: true,
-          data: {
-            revoked: true,
-            credentialId: CREDENTIAL_ID,
-            revokedAt: "2026-07-31T02:00:00.000Z",
-          },
-          meta: {
-            requestId: input.requestId ?? "server_request_1",
-            apiVersion: "v1",
-          },
-        })
-      )
-      const original = harness.state.writeLogoutDeliveryJournal.bind(
-        harness.state
-      )
-      let injected = false
-      harness.state.writeLogoutDeliveryJournal = async (journal) => {
-        if (
-          !injected &&
-          crashPoint === "before_outcome_record" &&
-          journal.phase === "outcome_recorded"
-        ) {
-          injected = true
-          throw new Error("simulated crash before outcome record")
-        }
-        await original(journal)
-        if (
-          !injected &&
-          ((crashPoint === "before_delete" &&
-            journal.phase === "dispatch_intent") ||
-            (crashPoint === "after_outcome_record" &&
-              journal.phase === "outcome_recorded"))
-        ) {
-          injected = true
-          throw new Error(`simulated ${crashPoint} crash`)
-        }
-      }
-
-      await expect(harness.auth.logout(GLOBAL)).rejects.toThrow("simulated")
-      harness.state.writeLogoutDeliveryJournal = original
-      expect(await harness.state.readLogoutDeliveryJournal()).toMatchObject({
-        phase: expectedPhase,
-      })
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/public/v1/sessions/current"
-        )
-      ).toHaveLength(expectedDeletes)
-
-      const replay = await harness.auth.logout(GLOBAL)
-      expect(replay.exitCode).toBe(replayExitCode)
-      expect(
-        harness.transport.requests.filter(
-          (request) => request.path === "/public/v1/sessions/current"
-        )
-      ).toHaveLength(expectedDeletes)
-      await replay.postRenderAcknowledgement?.acknowledge()
-      expect(await harness.state.readLogoutDeliveryJournal()).toBeNull()
-    }
-  )
-
   it.each(
     (["confirmed_inactive", "unknown"] as const).flatMap((remoteOutcome) =>
-      (
-        [
-          "prepared",
-          "keychain",
-          "credentials",
-          "device",
-          "token_index",
-          "reservation",
-        ] as const
-      ).map((failurePoint) => [remoteOutcome, failurePoint] as const)
+      (["keychain"] as const).map((failurePoint) =>
+        [remoteOutcome, failurePoint] as const
+      )
     )
   )(
     "keeps remote %s authoritative across %s cleanup failure and recovery",
@@ -4077,24 +1849,25 @@ describe("auth status and logout", () => {
           })
         )
       }
-      const restore = injectLogoutCleanupFailure(harness, failurePoint)
+      const restore = injectLogoutCleanupFailure(harness)
 
       const failedCleanup = await harness.auth.logout(GLOBAL)
-      expect(failedCleanup.exitCode).toBe(remoteOutcome === "unknown" ? 5 : 1)
-      expect(failedCleanup.postRenderAcknowledgement).toBeUndefined()
-      expect(failedCleanup.envelope).toMatchObject({
-        ok: false,
-        error: {
-          details: {
-            remoteOutcome,
-            localCleanupFailed: true,
-          },
-        },
-      })
-      if (remoteOutcome === "unknown") {
+      expect(failedCleanup.exitCode).toBe(5)
+      if (remoteOutcome === "confirmed_inactive") {
         expect(failedCleanup.envelope).toMatchObject({
+          ok: false,
           error: {
             details: {
+              localCleanupFailed: true,
+            },
+          },
+        })
+      } else {
+        expect(failedCleanup.envelope).toMatchObject({
+          ok: false,
+          error: {
+            details: {
+              errorCode: "OWNER_REQUIRED",
               resolutionUrl: "https://app.adrate.io/settings/security",
             },
           },
@@ -4107,69 +1880,50 @@ describe("auth status and logout", () => {
       ).toHaveLength(1)
       restore()
 
+      if (remoteOutcome === "unknown") {
+        harness.transport.enqueue((input) =>
+          response(input, 401, {
+            ok: false,
+            error: {
+              code: "OWNER_REQUIRED",
+              message: "Owner required",
+              retryable: false,
+              details: {},
+            },
+            meta: {
+              requestId: input.requestId ?? "server_request_1",
+              apiVersion: "v1",
+            },
+          })
+        )
+      } else {
+        harness.transport.enqueue((input) =>
+          response(input, 200, {
+            ok: true,
+            data: {
+              revoked: true,
+              credentialId: CREDENTIAL_ID,
+              revokedAt: "2026-07-31T02:00:00.000Z",
+            },
+            meta: {
+              requestId: input.requestId ?? "server_request_1",
+              apiVersion: "v1",
+            },
+          })
+        )
+      }
+
       const recovered = await harness.auth.logout(GLOBAL)
       expect(recovered.exitCode).toBe(remoteOutcome === "unknown" ? 5 : 0)
-      expect(recovered.postRenderAcknowledgement).toBeDefined()
       expect(
         harness.transport.requests.filter(
           (request) => request.path === "/public/v1/sessions/current"
         )
-      ).toHaveLength(1)
-      await recovered.postRenderAcknowledgement!.acknowledge()
-      expect(await harness.state.readLogoutDeliveryJournal()).toBeNull()
+      ).toHaveLength(2)
     }
   )
 
-  it("replays only the old logout fact and preserves a newer credential generation", async () => {
-    const harness = await createHarness()
-    await installStoredCredential(harness, true)
-    harness.transport.enqueue((input) =>
-      response(input, 200, {
-        ok: true,
-        data: {
-          revoked: true,
-          credentialId: CREDENTIAL_ID,
-          revokedAt: "2026-07-31T02:00:00.000Z",
-        },
-        meta: {
-          requestId: input.requestId ?? "server_request_1",
-          apiVersion: "v1",
-        },
-      })
-    )
-    const old = await harness.auth.logout(GLOBAL)
-    expect(old.exitCode).toBe(0)
-    expect(await harness.state.readLogoutDeliveryJournal()).not.toBeNull()
-
-    const replacement = await installStoredCredential(harness, true)
-    replacement.generation = "99999999-9999-4999-8999-999999999999"
-    await harness.state.withAuthLock(() =>
-      harness.state.writeTokenIndex(replacement)
-    )
-    const requestCount = harness.transport.requests.length
-
-    const replay = await harness.auth.logout(GLOBAL)
-    expect(replay).toMatchObject({
-      exitCode: 0,
-      envelope: {
-        data: {
-          remoteOutcome: "confirmed_inactive",
-          currentCredentialPreserved: true,
-        },
-      },
-    })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      generation: replacement.generation,
-    })
-    await replay.postRenderAcknowledgement!.acknowledge()
-    expect(await harness.state.readLogoutDeliveryJournal()).toBeNull()
-    expect(await harness.state.readTokenIndex()).toMatchObject({
-      generation: replacement.generation,
-    })
-  })
-
-  it("fences logout against an in-flight Device issue response", async () => {
+  it("lets logout cancel an in-flight local Device issue without a recovery journal", async () => {
     const harness = await createHarness()
     const entered = gate<void>()
     const release = gate<void>()
@@ -4187,113 +1941,14 @@ describe("auth status and logout", () => {
 
     const peer = createPeer(harness)
     const logout = await peer.auth.logout(GLOBAL)
-    expect(logout.exitCode).toBe(5)
+    expect(logout.exitCode).toBe(0)
     expect(await harness.state.readDeviceIssueReservation()).toBeNull()
     release.resolve(undefined)
     await expect(issuing).rejects.toMatchObject({ exitCode: 4 })
     expect(await harness.state.readDeviceState()).toBeNull()
   })
 
-  it("keeps a new Device flow when stale whoami completes", async () => {
-    const harness = await createHarness()
-    await installStoredCredential(harness, true)
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    harness.transport.enqueue(async (input) => {
-      entered.resolve(undefined)
-      await release.promise
-      return response(input, 401, {
-        ok: false,
-        error: {
-          code: "INVALID_CREDENTIAL",
-          message: "invalid",
-          retryable: false,
-          details: {},
-        },
-        meta: {
-          requestId: input.requestId ?? "server_request_1",
-          apiVersion: "v1",
-        },
-      })
-    })
-    const staleWhoami = harness.auth.whoami(GLOBAL)
-    await entered.promise
-
-    enqueuePublicError(peer, "INVALID_CREDENTIAL")
-    const logout = await peer.auth.logout(GLOBAL)
-    expect(logout.exitCode).toBe(0)
-    await logout.postRenderAcknowledgement?.acknowledge()
-    enqueueDeviceCode(peer)
-    expect(
-      (
-        await peer.auth.login({
-          global: GLOBAL,
-          noWait: true,
-          resume: false,
-          deviceName: "new-device",
-        })
-      ).exitCode
-    ).toBe(0)
-    const generation = (await peer.state.readDeviceState())?.generation
-
-    release.resolve(undefined)
-    expect((await staleWhoami).exitCode).toBe(3)
-    expect(await peer.state.readDeviceState()).toMatchObject({
-      generation,
-      localState: "issued",
-      deviceName: "new-device",
-    })
-  })
-
-  it("keeps a new Device flow when a stale logout response arrives", async () => {
-    const harness = await createHarness()
-    await installStoredCredential(harness, true)
-    const peer = createPeer(harness)
-    const entered = gate<void>()
-    const release = gate<void>()
-    harness.transport.enqueue(async (input) => {
-      entered.resolve(undefined)
-      await release.promise
-      return response(input, 200, {
-        ok: true,
-        data: {
-          revoked: true,
-          credentialId: CREDENTIAL_ID,
-          revokedAt: "2026-07-31T02:00:00.000Z",
-        },
-        meta: {
-          requestId: input.requestId ?? "server_request_1",
-          apiVersion: "v1",
-        },
-      })
-    })
-    const staleLogout = harness.auth.logout(GLOBAL)
-    await entered.promise
-
-    const recovered = await peer.auth.logout(GLOBAL)
-    expect(recovered.exitCode).toBe(5)
-    expect(peer.transport.requests).toHaveLength(0)
-    await recovered.postRenderAcknowledgement?.acknowledge()
-    enqueueDeviceCode(peer)
-    await peer.auth.login({
-      global: GLOBAL,
-      noWait: true,
-      resume: false,
-      deviceName: "new-device",
-    })
-    const generation = (await peer.state.readDeviceState())?.generation
-
-    release.resolve(undefined)
-    await expect(staleLogout).rejects.toMatchObject({ exitCode: 5 })
-    expect(await peer.state.readDeviceState()).toMatchObject({
-      generation,
-      localState: "issued",
-      deviceName: "new-device",
-    })
-  })
-
-  it("blocks a new login while Keychain cleanup is outside the lock", async () => {
+  it("blocks a new login while Keychain cleanup holds the auth lock", async () => {
     const harness = await createHarness()
     await installStoredCredential(harness, true)
     const peer = createPeer(harness)
@@ -4319,7 +1974,6 @@ describe("auth status and logout", () => {
     )
     const logout = harness.auth.logout(GLOBAL)
     await entered.promise
-    expect(await harness.state.readAuthCleanupReservation()).not.toBeNull()
 
     await expect(
       peer.auth.login({
@@ -4328,12 +1982,13 @@ describe("auth status and logout", () => {
         resume: false,
         deviceName: "blocked-device",
       })
-    ).rejects.toMatchObject({ exitCode: 3 })
+    ).rejects.toThrow(
+      "Another AdRate CLI process is updating local authentication state."
+    )
     expect(peer.transport.requests).toHaveLength(0)
 
     release.resolve(undefined)
     expect((await logout).exitCode).toBe(0)
-    expect(await harness.state.readAuthCleanupReservation()).toBeNull()
   })
 
   it.each([
@@ -4350,128 +2005,15 @@ describe("auth status and logout", () => {
       if (outcome.envelope.ok) {
         expect(outcome.envelope.data.alreadyInactive).toBe(alreadyInactive)
       }
-      expect(await harness.state.readTokenIndex()).toBeNull()
-      expect(harness.keychain.values.size).toBe(0)
+      if (exitCode === 0) {
+        expect(await harness.state.readTokenIndex()).toBeNull()
+        expect(harness.keychain.values.size).toBe(0)
+      } else {
+        expect(await harness.state.readTokenIndex()).not.toBeNull()
+        expect(harness.keychain.values.size).toBeGreaterThan(0)
+      }
     }
   )
-
-  it("clears local auth but reports outcome unknown on revoke timeout", async () => {
-    const harness = await createHarness()
-    await installStoredCredential(harness, true)
-    harness.transport.enqueue(() =>
-      Promise.reject(new HttpTransportError("timeout", "timeout"))
-    )
-    const outcome = await harness.auth.logout(GLOBAL)
-    expect(outcome).toMatchObject({
-      exitCode: 5,
-      envelope: { ok: false },
-    })
-    expect(await harness.state.readTokenIndex()).toBeNull()
-    expect(harness.keychain.values.size).toBe(0)
-  })
-
-  it("preserves delivery_unknown through logout and blocks a replacement login", async () => {
-    const harness = await createHarness()
-    await issue(harness)
-    harness.now.value += 5_000
-    harness.transport.enqueue(() =>
-      Promise.reject(new HttpTransportError("timeout", "lost response"))
-    )
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: false, resume: true })
-    ).rejects.toMatchObject({ exitCode: 5 })
-    const requestCount = harness.transport.requests.length
-
-    const logout = await harness.auth.logout(GLOBAL)
-    expect(logout).toMatchObject({
-      exitCode: 5,
-      envelope: {
-        ok: false,
-        error: {
-          details: {
-            deliveryState: "delivery_unknown",
-            resolutionEnvironment: "production",
-            resolutionUrl: "https://app.adrate.io/settings/security",
-          },
-        },
-      },
-    })
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-    })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-
-    await expect(
-      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
-    ).rejects.toMatchObject({ exitCode: 2 })
-    expect(harness.transport.requests).toHaveLength(requestCount)
-  })
-
-  it("normalizes expired pre-dispatch and dispatch-intent leases before logout", async () => {
-    const predispatch = await createHarness()
-    await issue(predispatch)
-    const preDevice = (await predispatch.state.readDeviceState())!
-    const expiredPredispatch: DevicePollAttempt = {
-      formatVersion: 1,
-      ownerToken: POLL_OWNER_TOKEN,
-      deviceGeneration: preDevice.generation,
-      environment: preDevice.environment,
-      issuerOrigin: preDevice.issuerOrigin,
-      clientInstanceId: preDevice.clientInstanceId,
-      phase: "selecting_backend",
-      deliveryVerification: false,
-      storageKind: null,
-      ownerPid: predispatch.processIdentity.pid,
-      ownerProcessFingerprint: predispatch.processIdentity.fingerprint,
-      createdAt: "2026-07-31T01:59:00.000Z",
-      dispatchedAt: null,
-      verificationClaimedAt: null,
-      responseAcknowledgement: null,
-      leaseExpiresAt: "2026-07-31T01:59:45.000Z",
-    }
-    await predispatch.state.withAuthLock(() =>
-      predispatch.state.writeDevicePollAttempt(expiredPredispatch)
-    )
-    expect((await predispatch.auth.logout(GLOBAL)).exitCode).toBe(0)
-    expect(await predispatch.state.readDevicePollAttempt()).toBeNull()
-    expect(await predispatch.state.readDeviceState()).toBeNull()
-    expect(predispatch.transport.requests).toHaveLength(1)
-
-    const dispatched = await createHarness()
-    await issue(dispatched)
-    const dispatchDevice = (await dispatched.state.readDeviceState())!
-    await dispatched.state.withAuthLock(async () => {
-      await dispatched.state.writeDeviceState({
-        ...dispatchDevice,
-        localState: "polling",
-      })
-      await dispatched.state.writeDevicePollAttempt({
-        ...expiredPredispatch,
-        deviceGeneration: dispatchDevice.generation,
-        environment: dispatchDevice.environment,
-        issuerOrigin: dispatchDevice.issuerOrigin,
-        clientInstanceId: dispatchDevice.clientInstanceId,
-        phase: "dispatch_intent",
-        storageKind: "keychain",
-        dispatchedAt: "2026-07-31T01:59:00.000Z",
-        verificationClaimedAt: null,
-        ownerPid: dispatched.processIdentity.pid,
-        ownerProcessFingerprint: dispatched.processIdentity.fingerprint,
-      })
-    })
-    const unknown = await dispatched.auth.logout(GLOBAL)
-    expect(unknown).toMatchObject({
-      exitCode: 5,
-      envelope: {
-        error: { details: { deliveryState: "delivery_unknown" } },
-      },
-    })
-    expect(await dispatched.state.readDeviceState()).toMatchObject({
-      localState: "delivery_unknown",
-    })
-    expect(await dispatched.state.readDevicePollAttempt()).toBeNull()
-    expect(dispatched.transport.requests).toHaveLength(1)
-  })
 
   it.each(["network", "malformed", "mismatch"] as const)(
     "preserves fallback storage warning for first /me %s failure",
@@ -4512,4 +2054,446 @@ describe("auth status and logout", () => {
       })
     }
   )
+})
+
+describe("--device output mode", () => {
+  it("emits a single parseable JSON line with the required four fields", async () => {
+    const harness = await createHarness()
+    const stdoutLines: Array<string> = []
+    const authWithOutput = new AuthService({
+      http: new PublicHttpClient(harness.transport),
+      local: harness.local,
+      now: () => new Date(harness.now.value),
+      sleep: (ms) => {
+        harness.now.value += ms
+        return Promise.resolve()
+      },
+    })
+
+    enqueueDeviceCode(harness)
+    enqueueToken(harness)
+    enqueueMe(harness)
+
+    const outcome = await authWithOutput.login(
+      {
+        global: GLOBAL,
+        noWait: false,
+        resume: false,
+        device: true,
+      },
+      (line) => stdoutLines.push(line)
+    )
+
+    expect(outcome.exitCode).toBe(0)
+    expect(stdoutLines).toHaveLength(1)
+    const parsed = JSON.parse(stdoutLines[0]!)
+    expect(parsed).toHaveProperty("verificationUriComplete")
+    expect(parsed).toHaveProperty("verificationUri")
+    expect(parsed).toHaveProperty("userCode")
+    expect(parsed).toHaveProperty("expiresIn")
+    expect(parsed.verificationUriComplete).toBe(
+      "https://app.adrate.io/device?user_code=ABCD-EFGH"
+    )
+    expect(parsed.verificationUri).toBe("https://app.adrate.io/device")
+    expect(parsed.userCode).toBe("ABCD-EFGH")
+    expect(typeof parsed.expiresIn).toBe("number")
+    expect(parsed.expiresIn).toBeGreaterThan(0)
+    expect(parsed.expiresIn).toBeLessThanOrEqual(600)
+    expect(parsed).not.toHaveProperty("deviceCode")
+    expect(parsed).not.toHaveProperty("device_code")
+    expect(Object.keys(parsed)).toHaveLength(4)
+
+    const finalStdout = captureStream()
+    renderOutcome(
+      outcome,
+      { json: true, verbose: false },
+      {
+        stdout: finalStdout.stream,
+        stderr: captureStream().stream,
+      }
+    )
+    const combinedLines = [...stdoutLines, finalStdout.read().trim()]
+    expect(combinedLines).toHaveLength(2)
+    expect(JSON.parse(combinedLines[1]!)).toMatchObject({ ok: true })
+  })
+
+  it("emits JSON when resuming existing device state on reconnection", async () => {
+    const harness = await createHarness()
+    const stdoutLines: Array<string> = []
+    const authWithOutput = new AuthService({
+      http: new PublicHttpClient(harness.transport),
+      local: harness.local,
+      now: () => new Date(harness.now.value),
+      sleep: (ms) => {
+        harness.now.value += ms
+        return Promise.resolve()
+      },
+    })
+
+    // First: issue device code (--no-wait creates valid device state without polling)
+    enqueueDeviceCode(harness)
+    const issued = await authWithOutput.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+      device: false,
+    })
+    expect(issued.exitCode).toBe(0)
+    expect(stdoutLines).toHaveLength(0)
+
+    // Advance time to be within the polling window
+    harness.now.value += 5_000
+
+    // Second: --device login should find existing device state, emit JSON, and poll
+    enqueueToken(harness)
+    enqueueMe(harness)
+
+    const outcome = await authWithOutput.login(
+      {
+        global: GLOBAL,
+        noWait: false,
+        resume: false,
+        device: true,
+      },
+      (line) => stdoutLines.push(line)
+    )
+
+    expect(outcome.exitCode).toBe(0)
+    expect(stdoutLines).toHaveLength(1)
+    const parsed = JSON.parse(stdoutLines[0]!)
+    expect(parsed.userCode).toBe("ABCD-EFGH")
+    expect(parsed.verificationUriComplete).toBe(
+      "https://app.adrate.io/device?user_code=ABCD-EFGH"
+    )
+    expect(parsed).not.toHaveProperty("deviceCode")
+    expect(parsed).not.toHaveProperty("device_code")
+  })
+
+  it("re-issues and emits when existing device state has expired", async () => {
+    const harness = await createHarness()
+    const stdoutLines: Array<string> = []
+    const authWithOutput = new AuthService({
+      http: new PublicHttpClient(harness.transport),
+      local: harness.local,
+      now: () => new Date(harness.now.value),
+      sleep: (ms) => {
+        harness.now.value += ms
+        return Promise.resolve()
+      },
+    })
+
+    // Issue device code
+    enqueueDeviceCode(harness)
+    await authWithOutput.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+      device: false,
+    })
+    expect(stdoutLines).toHaveLength(0)
+
+    // Advance time past expiry (device_code expires_in=600s)
+    harness.now.value += 700_000
+
+    // Device re-issue (expired state cleared → new issue) + poll + me
+    enqueueDeviceCode(harness)
+    enqueueToken(harness)
+    enqueueMe(harness)
+
+    const outcome = await authWithOutput.login(
+      {
+        global: GLOBAL,
+        noWait: false,
+        resume: false,
+        device: true,
+      },
+      (line) => stdoutLines.push(line)
+    )
+
+    expect(outcome.exitCode).toBe(0)
+    expect(stdoutLines).toHaveLength(1)
+    const parsed = JSON.parse(stdoutLines[0]!)
+    expect(parsed.userCode).toBe("ABCD-EFGH")
+    expect(Object.keys(parsed)).toHaveLength(4)
+  })
+
+  it("is mutually exclusive with --no-wait and --resume", async () => {
+    const harness = await createHarness()
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: true,
+        resume: false,
+        device: true,
+      })
+    ).rejects.toMatchObject({ exitCode: 2 })
+    await expect(
+      harness.auth.login({
+        global: GLOBAL,
+        noWait: false,
+        resume: true,
+        device: true,
+      })
+    ).rejects.toMatchObject({ exitCode: 2 })
+  })
+
+  it("does not emit stdout in --no-wait mode", async () => {
+    const harness = await createHarness()
+    const stdoutLines: Array<string> = []
+    const authWithoutOutput = new AuthService({
+      http: new PublicHttpClient(harness.transport),
+      local: harness.local,
+      now: () => new Date(harness.now.value),
+      sleep: () => Promise.resolve(),
+    })
+
+    enqueueDeviceCode(harness)
+
+    const outcome = await authWithoutOutput.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+      device: false,
+    })
+
+    expect(outcome.exitCode).toBe(0)
+    expect(stdoutLines).toHaveLength(0)
+  })
+
+  it("satisfies --no-input validation when --device is present", async () => {
+    const harness = await createHarness()
+    // --no-input without --no-wait/--resume/--device should fail
+    await expect(
+      harness.auth.login({
+        global: { ...GLOBAL, noInput: true },
+        noWait: false,
+        resume: false,
+        device: false,
+      })
+    ).rejects.toMatchObject({ exitCode: 2 })
+
+    // --no-input with --device should pass validation
+    const authWithTime = new AuthService({
+      http: new PublicHttpClient(harness.transport),
+      local: harness.local,
+      now: () => new Date(harness.now.value),
+      sleep: (ms) => {
+        harness.now.value += ms
+        return Promise.resolve()
+      },
+    })
+    enqueueDeviceCode(harness)
+    enqueueToken(harness)
+    enqueueMe(harness)
+    const outcome = await authWithTime.login(
+      {
+        global: { ...GLOBAL, noInput: true },
+        noWait: false,
+        resume: false,
+        device: true,
+      },
+      () => undefined
+    )
+    expect(outcome.exitCode).toBe(0)
+  })
+})
+
+describe("credential normalization before login", () => {
+  it("reports unknown after clearing token_missing residual state, then allows an explicit retry", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    // 凭据文件和 secret 都缺失，无法确认远端是否已撤销。
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+    harness.keychain.values.clear()
+
+    const first = await harness.auth.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+    })
+    expect(first).toMatchObject({
+      exitCode: 5,
+      envelope: {
+        error: { details: { localStateCleared: true } },
+      },
+    })
+    expect(await harness.state.readTokenIndex()).toBeNull()
+
+    enqueueDeviceCode(harness)
+    await expect(
+      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+    ).resolves.toMatchObject({ exitCode: 0, envelope: { ok: true } })
+  })
+
+  it("revokes the preserved Token when Accio removed only credentials.json", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    const index = await harness.state.readTokenIndex()
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+
+    // Enqueue successful DELETE /sessions/current (归一化 logout)
+    harness.transport.enqueue((input) =>
+      response(input, 200, {
+        ok: true,
+        data: {
+          revoked: true,
+          credentialId: index!.credentialId,
+          revokedAt: "2026-07-31T03:00:00.000Z",
+        },
+        meta: { requestId: input.requestId ?? "r1", apiVersion: "v1" },
+      })
+    )
+    // Enqueue device code for the new login after normalization clears state
+    enqueueDeviceCode(harness)
+
+    const outcome = await harness.auth.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+    })
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.envelope.ok).toBe(true)
+    expect(harness.transport.requests[0]).toMatchObject({
+      method: "DELETE",
+      path: "/public/v1/sessions/current",
+    })
+    expect(await harness.state.readDeviceState()).not.toBeNull()
+  })
+
+  it("preserves a valid stored credential and does not send DELETE", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+
+    await expect(
+      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+    ).rejects.toMatchObject({ exitCode: 2 })
+    expect(harness.transport.requests).toHaveLength(0)
+    expect(await harness.state.readTokenIndex()).not.toBeNull()
+    expect([...harness.keychain.values.values()]).toEqual([TOKEN])
+  })
+
+  it("revokes locally expired metadata before issuing a new Device flow", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    const metadata = await harness.state.readCredentials()
+    await harness.state.writeCredentials({
+      ...metadata!,
+      absoluteExpiresAt: "2026-07-31T01:59:59.000Z",
+    })
+
+    enqueuePublicError(harness, "CREDENTIAL_EXPIRED")
+    enqueueDeviceCode(harness)
+
+    await expect(
+      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+    ).resolves.toMatchObject({ exitCode: 0, envelope: { ok: true } })
+    expect(harness.transport.requests[0]).toMatchObject({
+      method: "DELETE",
+      path: "/public/v1/sessions/current",
+    })
+  })
+
+  it("clears credentials on INVALID_CREDENTIAL response and allows new login", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+
+    // Enqueue DELETE /sessions/current → INVALID_CREDENTIAL (inactive)
+    harness.transport.enqueue((input) =>
+      response(input, 401, {
+        ok: false,
+        error: {
+          code: "INVALID_CREDENTIAL",
+          message: "Credential not found",
+          retryable: false,
+          details: {},
+        },
+        meta: { requestId: input.requestId ?? "r1", apiVersion: "v1" },
+      })
+    )
+    // Enqueue device code for the new login after normalization clears state
+    enqueueDeviceCode(harness)
+
+    const outcome = await harness.auth.login({
+      global: GLOBAL,
+      noWait: true,
+      resume: false,
+    })
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.envelope.ok).toBe(true)
+    // Old token-index should have been cleared by normalization
+    expect(await harness.state.readTokenIndex()).toBeNull()
+  })
+
+  it("preserves credentials when remote logout transport fails", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+    harness.transport.enqueue(() =>
+      Promise.reject(new HttpTransportError("timeout", "timeout"))
+    )
+
+    await expect(
+      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+    ).resolves.toMatchObject({ exitCode: 5, envelope: { ok: false } })
+    expect(await harness.state.readTokenIndex()).not.toBeNull()
+    expect([...harness.keychain.values.values()]).toEqual([TOKEN])
+  })
+
+  it("returns unknown when remote revocation succeeded but local cleanup fails", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    const index = await harness.state.readTokenIndex()
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+    harness.transport.enqueue((input) =>
+      response(input, 200, {
+        ok: true,
+        data: {
+          revoked: true,
+          credentialId: index!.credentialId,
+          revokedAt: "2026-07-31T03:00:00.000Z",
+        },
+        meta: { requestId: input.requestId ?? "r1", apiVersion: "v1" },
+      })
+    )
+    harness.keychain.onRemove = () =>
+      Promise.reject(new Error("simulated cleanup failure"))
+
+    await expect(
+      harness.auth.login({ global: GLOBAL, noWait: true, resume: false })
+    ).resolves.toMatchObject({
+      exitCode: 5,
+      envelope: { error: { details: { localCleanupFailed: true } } },
+    })
+    expect(await harness.state.readTokenIndex()).not.toBeNull()
+  })
+
+  it("skips normalization in --test mode", async () => {
+    const harness = await createHarness()
+    await installStoredCredential(harness, true)
+    // Delete credentials.json to create disconnect scenario
+    await harness.state.fileSystem.removeSecureFile(
+      harness.state.paths.credentials
+    )
+    harness.keychain.values.clear()
+
+    // --test should not normalize, but directly fail because state is not clean for test
+    await expect(
+      harness.auth.login({
+        global: { ...GLOBAL, test: true },
+        noWait: true,
+        resume: false,
+      })
+    ).rejects.toMatchObject({ exitCode: 2 })
+  })
 })

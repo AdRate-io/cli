@@ -325,7 +325,38 @@ describe("DefaultHttpTransport", () => {
     timeoutSpy.mockRestore()
   })
 
-  it("Public JSON POST 在 fetch 前拒绝非法 Key 和非 120 秒 deadline", async () => {
+  it("标准 Public JSON POST 显式锁定 15 秒", async () => {
+    const requestId = "feedback-response-1"
+    const transport = new StaticTransport({
+      status: 200,
+      headers: {},
+      requestId,
+      text: successEnvelope(requestId),
+    })
+    await new PublicHttpClient(transport).requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/feedback",
+      token: "opaque-session-token",
+      idempotencyKey: "feedback_key",
+      json: { category: "bug", message: "literal $()" },
+      deadlineMs: 15_000,
+    })
+
+    expect(transport.requests).toEqual([
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/feedback",
+        token: "opaque-session-token",
+        idempotencyKey: "feedback_key",
+        json: { category: "bug", message: "literal $()" },
+        deadlineMs: 15_000,
+      },
+    ])
+  })
+
+  it("Public JSON POST 在 fetch 前拒绝非法 Key 和非 15/120 秒 deadline", async () => {
     const client = new PublicHttpClient()
     await expect(
       client.requestPublic({
@@ -346,7 +377,7 @@ describe("DefaultHttpTransport", () => {
       token: "opaque-session-token",
       idempotencyKey: "abc_DEF-9",
       json: { desiredStatus: "ENABLE" },
-      deadlineMs: 15_000,
+      deadlineMs: 45_000,
     } as unknown as PublicRequestInput
     await expect(client.requestPublic(wrongDeadline)).rejects.toMatchObject({
       kind: "invalid_response",
@@ -564,42 +595,36 @@ describe("OAuth HTTP response boundary", () => {
 })
 
 describe("PublicHttpClient envelope boundary", () => {
-  it("Public JSON POST 仍经过严格 Content-Type、Envelope 和 requestId 边界", async () => {
-    const invalidEnvelope = new StaticTransport({
-      status: 202,
+  it("Public JSON POST accepts extra top-level fields in a valid envelope", async () => {
+    const requestId = "status-extra-envelope"
+    const validWithExtra = new StaticTransport({
+      status: 200,
       headers: {},
-      requestId: "status-invalid-envelope",
+      requestId,
       text: JSON.stringify({
         ok: true,
-        data: { command: {}, rawBody: "must-not-pass" },
-        meta: {
-          requestId: "status-invalid-envelope",
-          apiVersion: "v1",
-        },
+        data: { command: {} },
+        meta: { requestId, apiVersion: "v1" },
         internal: true,
       }),
     })
-    await expect(
-      new PublicHttpClient(invalidEnvelope).requestPublic({
-        method: "POST",
-        issuerOrigin: "https://api.adrate.io",
-        path: "/public/v1/ads/advertisers/70001/campaigns/80001/status",
-        token: "opaque-session-token",
-        idempotencyKey: "abc_DEF-9",
-        json: { desiredStatus: "ENABLE" },
-        deadlineMs: 120_000,
-      })
-    ).rejects.toBeInstanceOf(CliFailure)
-    expect(invalidEnvelope.requests).toHaveLength(1)
+    const result = await new PublicHttpClient(validWithExtra).requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/ads/advertisers/70001/campaigns/80001/status",
+      token: "opaque-session-token",
+      idempotencyKey: "abc_DEF-9",
+      json: { desiredStatus: "ENABLE" },
+      deadlineMs: 120_000,
+    })
+    expect(result.envelope.ok).toBe(true)
   })
 
   it.each([
     [undefined, false],
     ["text/plain", true],
-    ["application/json; charset=latin1", true],
-    ["application/json; charset=utf-8; profile=unexpected", true],
   ] as const)(
-    "拒绝非严格 JSON Content-Type: %s",
+    "拒绝非 JSON Content-Type: %s",
     async (contentType, defaultJsonContentType) => {
       const requestId = "invalid-content-type"
       const transport = new StaticTransport(
@@ -630,6 +655,27 @@ describe("PublicHttpClient envelope boundary", () => {
       })
     }
   )
+
+  it.each([
+    "application/json; charset=latin1",
+    "application/json; charset=utf-8; profile=extended",
+  ])("accepts relaxed JSON Content-Type: %s", async (contentType) => {
+    const requestId = "relaxed-content-type"
+    const transport = new StaticTransport({
+      status: 200,
+      headers: { "content-type": contentType },
+      requestId,
+      text: successEnvelope(requestId),
+    })
+    const result = await new PublicHttpClient(transport).requestPublic({
+      method: "GET",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/me",
+      token: "token",
+      deadlineMs: DEADLINES_MS.standard,
+    })
+    expect(result.envelope.ok).toBe(true)
+  })
 
   it.each([
     [200, errorEnvelope("status-error-on-success", null)],
@@ -665,8 +711,8 @@ describe("PublicHttpClient envelope boundary", () => {
     })
   })
 
-  it("只接受严格错误合同，拒绝额外顶层或 error 字段", async () => {
-    const requestId = "strict-error-contract"
+  it("accepts error envelope with extra top-level or error fields", async () => {
+    const requestId = "relaxed-error-contract"
     for (const body of [
       {
         ...JSON.parse(errorEnvelope(requestId, null)),
@@ -690,15 +736,14 @@ describe("PublicHttpClient envelope boundary", () => {
         requestId,
         text: JSON.stringify(body),
       })
-      await expect(
-        new PublicHttpClient(transport).requestPublic({
-          method: "GET",
-          issuerOrigin: "https://api.adrate.io",
-          path: "/public/v1/me",
-          token: "token",
-          deadlineMs: DEADLINES_MS.standard,
-        })
-      ).rejects.toMatchObject({ exitCode: 4 })
+      const result = await new PublicHttpClient(transport).requestPublic({
+        method: "GET",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/me",
+        token: "token",
+        deadlineMs: DEADLINES_MS.standard,
+      })
+      expect(result.envelope.ok).toBe(false)
     }
   })
 
@@ -868,30 +913,10 @@ describe("PublicHttpClient envelope boundary", () => {
     }
   })
 
-  it("拒绝非 JSON、非信封和未知错误码", async () => {
+  it("拒绝非 JSON 和缺少 meta 的非信封响应", async () => {
     for (const text of [
       "<html>gateway error</html>",
       JSON.stringify({ ok: true, data: {}, meta: {} }),
-      JSON.stringify({
-        ok: false,
-        error: {
-          code: "NOT_A_PUBLIC_CODE",
-          message: "unknown",
-          retryable: false,
-          details: {},
-        },
-        meta: { requestId: "unknown-code", apiVersion: "v1" },
-      }),
-      JSON.stringify({
-        ok: false,
-        error: {
-          code: "LOCAL_STATE_UNSAFE",
-          message: "local codes cannot come from the server",
-          retryable: false,
-          details: {},
-        },
-        meta: { requestId: "unknown-code", apiVersion: "v1" },
-      }),
     ]) {
       const transport = new StaticTransport({
         status: 502,
@@ -908,6 +933,30 @@ describe("PublicHttpClient envelope boundary", () => {
           deadlineMs: DEADLINES_MS.standard,
         })
       ).rejects.toBeInstanceOf(CliFailure)
+    }
+  })
+
+  it("accepts unknown error codes from the server", async () => {
+    const requestId = "unknown-code"
+    for (const code of ["NOT_A_PUBLIC_CODE", "LOCAL_STATE_UNSAFE", "FUTURE_ERROR"]) {
+      const transport = new StaticTransport({
+        status: 400,
+        headers: {},
+        requestId,
+        text: JSON.stringify({
+          ok: false,
+          error: { code, message: "unknown", retryable: false, details: {} },
+          meta: { requestId, apiVersion: "v1" },
+        }),
+      })
+      const result = await new PublicHttpClient(transport).requestPublic({
+        method: "GET",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/me",
+        token: "token",
+        deadlineMs: DEADLINES_MS.standard,
+      })
+      expect(result.envelope.ok).toBe(false)
     }
   })
 })

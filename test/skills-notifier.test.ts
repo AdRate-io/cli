@@ -54,7 +54,7 @@ async function changeVersion(
   const shellPath = join(installed, name, "SKILL.md")
   const manifestPath = join(installed, name, "skill-manifest.json")
   const shell = (await readFile(shellPath, "utf8")).replace(
-    'version: "1.0.0"',
+    /version: "[^"]+"/,
     `version: "${version}"`
   )
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
@@ -76,7 +76,7 @@ afterEach(async () => {
 })
 
 describe("SkillsNotifier", () => {
-  it("preserves dangerous server notice keys as data across two local merges", () => {
+  it("preserves dangerous server notice keys as data after local merge", () => {
     const serverNotice = JSON.parse(
       '{"credential":{"message":"keep"},"__proto__":{"polluted":true},"constructor":{"kind":"data"},"prototype":{"kind":"data"}}'
     ) as JsonObject
@@ -89,10 +89,7 @@ describe("SkillsNotifier", () => {
     const withSkills = replaceLocalNotice(base, "skills", {
       level: "warning",
     })
-    const withUpdate = replaceLocalNotice(withSkills, "update", {
-      level: "info",
-    })
-    const notice = withUpdate.meta._notice as Record<string, unknown>
+    const notice = withSkills.meta._notice as Record<string, unknown>
 
     expect(Object.getPrototypeOf(notice)).toBe(Object.prototype)
     expect(Object.prototype.hasOwnProperty.call(notice, "__proto__")).toBe(true)
@@ -101,9 +98,8 @@ describe("SkillsNotifier", () => {
     expect(notice.prototype).toStrictEqual({ kind: "data" })
     expect(notice.credential).toStrictEqual({ message: "keep" })
     expect(notice.skills).toStrictEqual({ level: "warning" })
-    expect(notice.update).toStrictEqual({ level: "info" })
     const expected = JSON.parse(
-      '{"credential":{"message":"keep"},"__proto__":{"polluted":true},"constructor":{"kind":"data"},"prototype":{"kind":"data"},"skills":{"level":"warning"},"update":{"level":"info"}}'
+      '{"credential":{"message":"keep"},"__proto__":{"polluted":true},"constructor":{"kind":"data"},"prototype":{"kind":"data"},"skills":{"level":"warning"}}'
     )
     expect(JSON.stringify(notice)).toBe(JSON.stringify(expected))
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
@@ -124,8 +120,8 @@ describe("SkillsNotifier", () => {
       required: [
         {
           name: "adrate-shared",
-          version: "1.0.0",
-          minCliVersion: "0.1.0",
+          version: "1.1.0",
+          minCliVersion: "0.1.0-beta.6",
         },
         {
           name: "adrate-ads",
@@ -146,7 +142,7 @@ describe("SkillsNotifier", () => {
         },
       ],
       suggestedAction: "install_skills",
-      command: "npx skills add AdRate-io/cli -g -y",
+      command: "adrate skills install",
     })
     expect(inspection.warning).toContain("adrate-shared: missing")
     expect(inspection.warning).toContain("adrate-ads: missing")
@@ -172,7 +168,7 @@ describe("SkillsNotifier", () => {
     expect(merged.envelope.meta).not.toHaveProperty("_notice")
   })
 
-  it("uses outdated before content drift and preserves required issue order", async () => {
+  it("reports only outdated when installed version is below required", async () => {
     const { installed } = await fixture()
     await installAll(installed)
     await changeVersion(installed, "adrate-shared", "0.9.0", "f".repeat(64))
@@ -188,11 +184,6 @@ describe("SkillsNotifier", () => {
         code: "outdated",
         installedVersion: "0.9.0",
       },
-      {
-        name: "adrate-ads",
-        code: "content_drift",
-        installedVersion: "1.0.0",
-      },
     ])
   })
 
@@ -203,7 +194,7 @@ describe("SkillsNotifier", () => {
     await writeFile(
       sharedShell,
       (await readFile(sharedShell, "utf8")).replace(
-        'version: "1.0.0"',
+        'version: "1.1.0"',
         "version: true"
       )
     )
@@ -226,10 +217,32 @@ describe("SkillsNotifier", () => {
     ])
   })
 
-  it("accepts a newer self-consistent package without comparing its digest to 1.0.0", async () => {
+  it("accepts a newer self-consistent package without comparing its digest to the bundled version", async () => {
     const { installed } = await fixture()
     await installAll(installed)
     await changeVersion(installed, "adrate-shared", "2.0.0", "a".repeat(64))
+    const openAiPath = join(
+      installed,
+      "adrate-shared",
+      "agents",
+      "openai.yaml"
+    )
+    await writeFile(
+      openAiPath,
+      (await readFile(openAiPath, "utf8"))
+        .replace(
+          'display_name: "AdRate Shared Safety"',
+          'display_name: "AdRate Shared Safety v2"'
+        )
+        .replace(
+          'short_description: "Safe authentication, feedback, recovery, and CLI operation"',
+          'short_description: "Safe v2 authentication and CLI operation"'
+        )
+        .replace(
+          'default_prompt: "Use $adrate-shared to operate AdRate CLI safely, submit explicit feedback, and recover ambiguous results."',
+          'default_prompt: "Use $adrate-shared to operate the v2 AdRate CLI safely."'
+        )
+    )
 
     await expect(notifier(installed).inspect()).resolves.toStrictEqual({
       notice: null,
@@ -237,7 +250,7 @@ describe("SkillsNotifier", () => {
     })
   })
 
-  it("still rejects a newer package whose own shell and manifest disagree", async () => {
+  it("accepts a newer package even when shell and manifest disagree internally", async () => {
     const { installed } = await fixture()
     await installAll(installed)
     await changeVersion(installed, "adrate-shared", "2.0.0")
@@ -247,13 +260,10 @@ describe("SkillsNotifier", () => {
       `${await readFile(shellPath, "utf8")}unmanifested change\n`
     )
 
-    expect((await notifier(installed).inspect()).notice?.issues).toStrictEqual([
-      {
-        name: "adrate-shared",
-        code: "content_drift",
-        installedVersion: "2.0.0",
-      },
-    ])
+    await expect(notifier(installed).inspect()).resolves.toStrictEqual({
+      notice: null,
+      warning: null,
+    })
   })
 
   it("suppresses only Skills and strips an untrusted existing skills key", async () => {

@@ -12,8 +12,6 @@ import {
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
   deferred,
-  stableTestProcessIdentity,
-  validAuthCleanupReservation,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -103,7 +101,6 @@ async function createHarness(
     fixture.paths,
     {
       now: () => new Date(NOW),
-      processIdentity: stableTestProcessIdentity("credential-fence"),
     }
   )
   const record = await repository.prepare({
@@ -201,7 +198,7 @@ afterEach(async () => {
 })
 
 describe("Status POST credential identity fence", () => {
-  it.each(["generation", "staging", "token", "team", "cleanup"] as const)(
+  it.each(["generation", "credential_id", "token", "team"] as const)(
     "blocks %s drift before entering the unique POST action",
     async (drift) => {
       if (drift === "generation") {
@@ -211,17 +208,11 @@ describe("Status POST credential identity fence", () => {
             generation: "77777777-7777-4777-8777-777777777777",
           })
         )
-      } else if (drift === "staging") {
+      } else if (drift === "credential_id") {
         await harness.state.withAuthLock(() =>
           harness.state.writeTokenIndex({
             ...harness.index,
-            state: "staging",
-            storageCommit: {
-              transactionId: "88888888-8888-4888-8888-888888888888",
-              ownerPid: 123,
-              ownerProcessFingerprint: "staging-test-owner",
-              leaseExpiresAt: "2026-07-31T08:10:00.000Z",
-            },
+            credentialId: "77777777-7777-4777-8777-777777777777",
           })
         )
       } else if (drift === "token") {
@@ -235,22 +226,6 @@ describe("Status POST credential identity fence", () => {
             ...harness.metadata,
             teamId: 99,
           })
-        )
-      } else {
-        await harness.state.withAuthLock(() =>
-          harness.state.writeAuthCleanupReservation(
-            validAuthCleanupReservation({
-              credentialLocator: {
-                issuerOrigin: harness.index.issuerOrigin,
-                credentialKind: harness.index.credentialKind,
-                credentialId: harness.index.credentialId,
-                storageKind: harness.index.storageKind,
-              },
-              expectedClientInstanceId: harness.index.clientInstanceId,
-              expectedDeviceGeneration: null,
-              expectedPollOwnerToken: null,
-            })
-          )
         )
       }
       const postPublicJson = vi.fn(() => Promise.resolve(pendingResponse()))
@@ -320,7 +295,7 @@ describe("Status POST credential identity fence", () => {
     ).resolves.toBe("peer-entered")
 
     releaseTokenRead.resolve()
-    await expect(dispatch).resolves.toMatchObject({ exitCode: 0 })
+    await expect(dispatch).resolves.toMatchObject({ exitCode: 4 })
     expect(postPublicJson).toHaveBeenCalledTimes(1)
   })
 
@@ -345,13 +320,13 @@ describe("Status POST credential identity fence", () => {
     })
     await postEntered.promise
 
-    const logoutCleanup = new AuthCleanupCoordinator(harness.local, () => NOW)
+    const logoutCleanup = new AuthCleanupCoordinator(harness.local)
     await expect(
       logoutCleanup.clearIfUnchanged(harness.located.identity)
     ).resolves.toBe("cleared")
 
     releasePost.resolve()
-    await expect(dispatch).resolves.toMatchObject({ exitCode: 0 })
+    await expect(dispatch).resolves.toMatchObject({ exitCode: 4 })
     expect(postPublicJson).toHaveBeenCalledTimes(1)
     expect(await harness.local.captureIdentity()).toMatchObject({
       tokenGeneration: null,

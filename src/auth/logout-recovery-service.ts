@@ -1,115 +1,48 @@
-import { DEADLINES_MS, EXIT_CODE } from "../constants.js"
+import {
+  DEADLINES_MS,
+  EXIT_CODE,
+  INACTIVE_CREDENTIAL_CODES,
+} from "../constants.js"
+import { createLocalSuccess } from "../contracts/envelope.js"
+import { decodeCurrentSessionDeleteSuccess } from "../contracts/logout.js"
+import { issuerForEnvironment } from "../config/issuer.js"
 import {
   CliFailure,
   dependencyFailure,
   localRequestId,
   outcomeUnknownFailure,
 } from "../errors.js"
-import { decodeCurrentSessionDeleteSuccess } from "../contracts/logout.js"
 import { AuthCleanupCoordinator } from "./auth-cleanup-coordinator.js"
-import {
-  readAuthRemediationEvidence,
-  remediationDetails,
-} from "./auth-remediation.js"
 import { withPendingMeta } from "./auth-command-support.js"
-import {
-  LogoutDeliveryJournalCoordinator,
-  captureLogoutDeliveryResponseFact,
-} from "./logout-delivery-journal.js"
 import type { AuthContext } from "./auth-context.js"
-import type { AuthRemediationEvidence } from "./auth-remediation.js"
 import type { DevicePollCoordinator } from "./device-poll-coordinator.js"
-import type {
-  LogoutCleanupPreparation,
-  LogoutCliOutcome,
-} from "./logout-delivery-journal.js"
-import type { PublicEnvelope } from "../contracts/envelope.js"
+import type { CredentialInspection } from "./local-credentials.js"
 import type { CliOutcome } from "../errors.js"
 import type { GlobalOptions } from "../parser.js"
-import type { JsonObject } from "../contracts/json.js"
-import type { LogoutDeliveryJournal } from "../storage/schemas.js"
 
 /**
- * 只负责远端撤销、投递日志、条件清理和人工恢复证据。远端 DELETE 的
- * dispatch intent 必须先落盘；清理后的 outcome journal 必须等真实输出
- * 写回确认后才能删除。
+ * 简化版 logout：远端 DELETE 一次判定，精确 inactive 才清理本地凭据，
+ * 不确定结果保留凭据并 exit 5。
  */
 export class LogoutRecoveryService {
   private readonly cleanup: AuthCleanupCoordinator
-  private readonly delivery: LogoutDeliveryJournalCoordinator
 
   constructor(
     private readonly context: AuthContext,
     private readonly devicePoll: DevicePollCoordinator
   ) {
-    this.cleanup = new AuthCleanupCoordinator(context.local, context.now)
-    this.delivery = new LogoutDeliveryJournalCoordinator(context)
+    this.cleanup = new AuthCleanupCoordinator(context.local)
   }
 
-  async logout(global: GlobalOptions): Promise<LogoutCliOutcome> {
-    const pendingJournal = await this.delivery.read()
-    if (pendingJournal) {
-      if (pendingJournal.phase === "output_acknowledged") {
-        await this.delivery.finalizeAcknowledgedOutput()
-        throw dependencyFailure(
-          "A previous logout output acknowledgement was finalized locally. Retry the requested command.",
-          EXIT_CODE.retryable,
-          {
-            logoutDeliveryFinalized: true,
-            suggestedAction: "retry_command",
-          }
-        )
-      }
-      return this.recoverJournal(pendingJournal)
-    }
-
-    let normalization
-    try {
-      normalization = await this.devicePoll.normalizeForLogout()
-    } catch {
-      return this.unsafeLocalStateOutcome(
-        "The local Device poll state could not be safely normalized for logout."
-      )
-    }
-    if (normalization.kind === "cleanup_pending") {
-      const journal = await this.delivery.beginInterruptedCleanup(
-        normalization.reservation,
-        global.requestId ?? localRequestId()
-      )
-      return this.finishJournal(journal)
-    }
-    if (normalization.kind === "in_flight") {
-      throw dependencyFailure(
-        "A Device Token exchange is still in flight. Retry logout after the local poll lease ends.",
-        EXIT_CODE.retryable,
-        { retryAfterSeconds: normalization.retryAfterSeconds }
-      )
-    }
-
-    let evidence = await readAuthRemediationEvidence(this.context.local)
+  async logout(global: GlobalOptions): Promise<CliOutcome> {
     const pendingCommands = await this.context.local.countPendingCommands()
-    if (
-      normalization.kind !== "credential_pending" &&
-      (normalization.kind === "delivery_unknown" ||
-        evidence.device.value?.localState === "delivery_unknown")
-    ) {
-      return this.deliveryUnknownOutcome(
-        pendingCommands,
-        evidence,
-        normalization.kind === "delivery_unknown"
-          ? { safeRestartAt: normalization.safeRestartAt }
-          : {}
-      )
-    }
 
-    let expected
     try {
-      expected = await this.context.local.captureIdentity()
+      await this.devicePoll.normalizeForLogout()
     } catch {
-      return this.unsafeLocalStateOutcome(
-        "The local authentication identity is damaged or conflicting; no state was removed.",
-        pendingCommands,
-        evidence
+      return this.unknownOutcome(
+        "The local Device poll state could not be safely normalized for logout.",
+        pendingCommands
       )
     }
 
@@ -117,66 +50,66 @@ export class LogoutRecoveryService {
     try {
       inspection = await this.context.local.inspectAndRecover()
     } catch (error) {
-      evidence = await readAuthRemediationEvidence(this.context.local)
-      if (
-        error instanceof CliFailure &&
-        (error.exitCode === EXIT_CODE.outcomeUnknown ||
-          evidence.device.value?.localState === "delivery_unknown")
-      ) {
-        return this.deliveryUnknownOutcome(pendingCommands, evidence)
-      }
-      if (
-        error instanceof CliFailure &&
-        error.exitCode === EXIT_CODE.retryable
-      ) {
+      if (error instanceof CliFailure && error.exitCode === EXIT_CODE.retryable) {
         throw error
       }
-      return this.unsafeLocalStateOutcome(
+      return this.unknownOutcome(
         "The local credential state could not be safely inspected; no state was removed.",
         pendingCommands,
-        evidence
+        { localStatePreserved: true }
       )
     }
-    expected =
-      inspection.state === "located"
-        ? inspection.identity
-        : await this.context.local.captureIdentity()
 
-    const requestId = global.requestId ?? localRequestId()
+    return this.resolveInspectedLogout(global, inspection, pendingCommands)
+  }
+
+  /**
+   * login 归一化复用 logout 的唯一证据判定。传入已冻结的检查结果，
+   * 远端请求始终使用该结果里的 Token，本地清理仍由 identity fence 保护。
+   */
+  async logoutInspected(
+    global: GlobalOptions,
+    inspection: CredentialInspection
+  ): Promise<CliOutcome> {
+    const pendingCommands = await this.context.local.countPendingCommands()
+    return this.resolveInspectedLogout(global, inspection, pendingCommands)
+  }
+
+  private async resolveInspectedLogout(
+    global: GlobalOptions,
+    inspection: CredentialInspection,
+    pendingCommands: number
+  ): Promise<CliOutcome> {
     if (inspection.state === "none" || inspection.state === "device_only") {
-      const journal = await this.delivery.beginRecorded({
-        expected,
-        expectedCredentialId: null,
-        requestId,
-        remoteOutcome: "confirmed_inactive",
-        reason: "already_inactive",
-      })
-      return this.finishJournal(journal, pendingCommands)
+      return this.noLocalCredentialOutcome(pendingCommands)
     }
 
     if (inspection.state === "local_incomplete") {
-      const snapshot = await this.context.local.state.withAuthLock(() =>
-        this.context.local.readLocalSnapshotLocked()
+      if (inspection.reason === "token_missing") {
+        try {
+          const cleared = await this.cleanup.clearMissingCredentialState()
+          if (cleared === "cleared") {
+            return this.unknownOutcome(
+              "The local credential secret was already missing. Remaining local authentication records were cleared, but remote revocation is unknown.",
+              pendingCommands,
+              { reason: inspection.reason, localStateCleared: true }
+            )
+          }
+        } catch {
+          // 无法再次确认 secret 缺失时保留所有本地状态。
+        }
+      }
+      return this.unknownOutcome(
+        "Local authentication state is incomplete; no credential was removed.",
+        pendingCommands,
+        { reason: inspection.reason, localStatePreserved: true }
       )
-      const journal = await this.delivery.beginRecorded({
-        expected,
-        expectedCredentialId: snapshot.index?.credentialId ?? null,
-        requestId,
-        remoteOutcome: "unknown",
-        reason: "unlocatable",
-        resolutionEnvironment:
-          snapshot.index?.environment ?? expected.environment,
-      })
-      return this.finishJournal(journal, pendingCommands)
     }
 
-    const dispatch = await this.delivery.beginDispatch({
-      expected,
-      expectedCredentialId: inspection.index.credentialId,
-      requestId,
-    })
+    const requestId = global.requestId ?? localRequestId()
+    const expected = inspection.identity
 
-    let envelope: PublicEnvelope
+    let envelope
     let responseStatus: number
     try {
       const response = await this.context.http.requestPublic({
@@ -190,28 +123,19 @@ export class LogoutRecoveryService {
       envelope = response.envelope
       responseStatus = response.response.status
     } catch {
-      const recorded = await this.delivery.recordOutcome(
-        dispatch,
-        "unknown",
-        "transport_unknown",
-        null
+      return this.unknownOutcome(
+        "Remote revocation is unknown. Verify the device on the official Web security page.",
+        pendingCommands,
+        {
+          resolutionUrl: new URL(
+            "/settings/security",
+            issuerForEnvironment(inspection.index.environment).browserOrigin
+          ).toString(),
+          suggestedAction: "open_account_security",
+        }
       )
-      return recorded
-        ? this.finishJournal(recorded, pendingCommands)
-        : this.recoverCurrentJournal()
     }
 
-    const alreadyInactive =
-      !envelope.ok &&
-      ["INVALID_CREDENTIAL", "CREDENTIAL_EXPIRED", "USER_DISABLED"].includes(
-        envelope.error.code
-      )
-    const ownerUnknown =
-      !envelope.ok && envelope.error.code === "OWNER_REQUIRED"
-    const responseFact = captureLogoutDeliveryResponseFact(
-      envelope,
-      inspection.index.issuerOrigin
-    )
     const revoked = envelope.ok
       ? decodeCurrentSessionDeleteSuccess(
           responseStatus,
@@ -219,196 +143,131 @@ export class LogoutRecoveryService {
           inspection.index.credentialId
         )
       : null
-    if (revoked || alreadyInactive || ownerUnknown) {
-      const recorded = await this.delivery.recordOutcome(
-        dispatch,
-        revoked || alreadyInactive ? "confirmed_inactive" : "unknown",
-        revoked
-          ? "revoked"
-          : alreadyInactive
-            ? "already_inactive"
-            : "owner_required",
-        responseFact,
-        envelope.meta.requestId
-      )
-      return recorded
-        ? this.finishJournal(recorded, pendingCommands, envelope)
-        : this.recoverCurrentJournal()
-    }
+    const alreadyInactive =
+      !envelope.ok && INACTIVE_CREDENTIAL_CODES.has(envelope.error.code)
 
-    // 只有真实 Runtime 中明确发生在 Route handler 前的拒绝才能
-    // 证明 DELETE 未执行。即便如此也要保留可重放 journal，直到
-    // runner 确认真实 output write callback，不得在 service 层提前清除。
-    const provenNotExecuted =
-      !envelope.ok &&
-      (envelope.error.code === "INVALID_REQUEST" ||
-        envelope.error.code === "RATE_LIMITED")
-    const recorded = await this.delivery.recordOutcome(
-      dispatch,
-      provenNotExecuted ? "confirmed_not_executed" : "unknown",
-      provenNotExecuted ? "request_rejected" : "ambiguous_response",
-      responseFact,
-      envelope.meta.requestId
-    )
-    return recorded
-      ? this.finishJournal(recorded, pendingCommands, envelope)
-      : this.recoverCurrentJournal()
-  }
-
-  private async recoverCurrentJournal(): Promise<LogoutCliOutcome> {
-    const current = await this.delivery.read()
-    if (!current) {
-      throw dependencyFailure(
-        "Logout delivery ownership changed before the result could be confirmed.",
-        EXIT_CODE.outcomeUnknown
-      )
-    }
-    return this.recoverJournal(current)
-  }
-
-  private async recoverJournal(
-    journal: LogoutDeliveryJournal
-  ): Promise<LogoutCliOutcome> {
-    if (journal.phase === "output_acknowledged") {
-      await this.delivery.finalizeAcknowledgedOutput()
-      throw dependencyFailure(
-        "A previous logout output acknowledgement was finalized locally. Retry logout.",
-        EXIT_CODE.retryable,
-        {
-          logoutDeliveryFinalized: true,
-          suggestedAction: "retry_command",
+    if (revoked || alreadyInactive) {
+      try {
+        const cleared = await this.cleanup.clearIfUnchanged(expected)
+        if (cleared === "stale") {
+          return this.unknownOutcome(
+            "Authentication state changed during conditional cleanup.",
+            pendingCommands,
+            { currentCredentialPreserved: true }
+          )
         }
+      } catch {
+        return this.unknownOutcome(
+          "The remote session is inactive, but local credential cleanup failed.",
+          pendingCommands,
+          { localCleanupFailed: true }
+        )
+      }
+      return this.inactiveOutcome(
+        revoked ? "revoked" : "already_inactive",
+        pendingCommands,
+        revoked !== null,
+        envelope
       )
     }
-    if (journal.phase === "outcome_recorded") {
-      return this.finishJournal(journal)
-    }
-    // dispatch_intent 证明 DELETE 可能已经出站。恢复只能单调收敛 unknown，
-    // 绝不能重发 DELETE，也绝不能声称远端已 inactive。
-    const recorded = await this.delivery.recordOutcome(
-      journal,
-      "unknown",
-      "transport_unknown"
-    )
-    return recorded
-      ? this.finishJournal(recorded)
-      : this.recoverCurrentJournal()
-  }
 
-  private async finishJournal(
-    journal: LogoutDeliveryJournal,
-    knownPendingCommands?: number,
-    sourceEnvelope?: PublicEnvelope
-  ): Promise<LogoutCliOutcome> {
-    const pendingCommands =
-      knownPendingCommands ?? (await this.context.local.countPendingCommands())
-    if (journal.remoteOutcome === "confirmed_not_executed") {
-      // 可证明远端未执行时必须保留当前凭证。journal 仅负责
-      // 投递同一拒绝事实，完成 output ack 后才允许清除自身。
-      return this.delivery.outcome(journal, pendingCommands, {
-        sourceEnvelope,
-      })
-    }
-    const preparation = await this.delivery.prepareCleanup(journal)
-    if (preparation.kind === "journal_changed") {
-      return this.recoverCurrentJournal()
-    }
-    if (preparation.kind === "current_credential_preserved") {
-      return this.delivery.outcome(journal, pendingCommands, {
-        currentCredentialPreserved: true,
-        sourceEnvelope,
-      })
-    }
-    if (preparation.kind === "clean") {
-      return this.delivery.outcome(journal, pendingCommands, {
-        sourceEnvelope,
-      })
+    const ownerRequired = !envelope.ok && envelope.error.code === "OWNER_REQUIRED"
+    const httpAuthFailure =
+      !envelope.ok &&
+      (responseStatus === 401 ||
+        responseStatus === 403 ||
+        ownerRequired ||
+        !INACTIVE_CREDENTIAL_CODES.has(envelope.error.code))
+
+    if (httpAuthFailure) {
+      return this.unknownOutcome(
+        ownerRequired
+          ? "Remote revocation requires Owner confirmation. Verify the device on the official Web security page."
+          : "Remote revocation is unknown. Verify the device on the official Web security page.",
+        pendingCommands,
+        {
+          resolutionUrl: new URL(
+            "/settings/security",
+            issuerForEnvironment(inspection.index.environment).browserOrigin
+          ).toString(),
+          suggestedAction: "open_account_security",
+          errorCode: envelope.ok ? null : envelope.error.code,
+        },
+        envelope
+      )
     }
 
-    try {
-      const cleared = await this.runCleanup(preparation)
-      if (cleared === "stale") {
-        return this.delivery.outcome(journal, pendingCommands, {
-          currentCredentialPreserved: true,
-          sourceEnvelope,
-        })
-      }
-    } catch {
-      // journal 保留且不附带 output ack。unknown + cleanup failure 仍是 exit 5；
-      // 只有已确认 inactive + cleanup failure 才是普通业务失败 exit 1。
-      return this.delivery.outcome(journal, pendingCommands, {
-        localCleanupFailed: true,
-        sourceEnvelope,
-      })
-    }
-    return this.delivery.outcome(journal, pendingCommands, {
-      sourceEnvelope,
-    })
-  }
-
-  private runCleanup(
-    preparation: Extract<
-      LogoutCleanupPreparation,
-      { kind: "start" } | { kind: "resume" }
-    >
-  ): Promise<"cleared" | "stale"> {
-    return preparation.kind === "resume"
-      ? this.cleanup.resumeExisting(preparation.reservation)
-      : this.cleanup.clearIfUnchanged(preparation.expected)
-  }
-
-  private deliveryUnknownOutcome(
-    pendingCommands: number,
-    evidence: AuthRemediationEvidence,
-    extra: JsonObject = {}
-  ): CliOutcome {
-    const failure = outcomeUnknownFailure(
-      "The one-time Device Token delivery is unknown. Logout cannot prove revocation or remove the delivery fence; confirm the environment and verify the device on the official Web page.",
+    return this.unknownOutcome(
+      "Remote revocation is unknown. Verify the device on the official Web security page.",
+      pendingCommands,
       {
-        deliveryState: "delivery_unknown",
-        ...remediationDetails(evidence),
-        ...extra,
-        pendingCommandsRetained: pendingCommands,
-      }
+        resolutionUrl: new URL(
+          "/settings/security",
+          issuerForEnvironment(inspection.index.environment).browserOrigin
+        ).toString(),
+        suggestedAction: "open_account_security",
+      },
+      envelope
     )
+  }
+
+  private inactiveOutcome(
+    reason: "revoked" | "already_inactive",
+    pendingCommands: number,
+    revoked: boolean,
+    sourceEnvelope?: CliOutcome["envelope"]
+  ): CliOutcome {
+    const requestId = sourceEnvelope?.meta.requestId ?? localRequestId()
+    const envelope = createLocalSuccess(requestId, {
+      revoked,
+      alreadyInactive: reason === "already_inactive",
+      logoutReason: reason,
+    })
     return {
-      exitCode: EXIT_CODE.outcomeUnknown,
-      envelope: withPendingMeta(failure.envelope, pendingCommands),
-      warnings: this.pendingWarnings(pendingCommands, true),
+      exitCode: EXIT_CODE.success,
+      envelope: withPendingMeta(envelope, pendingCommands),
+      warnings: this.pendingWarnings(pendingCommands),
     }
   }
 
-  private remoteUnknownOutcome(
+  private noLocalCredentialOutcome(pendingCommands: number): CliOutcome {
+    const envelope = createLocalSuccess(localRequestId(), {
+      revoked: false,
+      alreadyInactive: true,
+      localCredentialFound: false,
+    })
+    return {
+      exitCode: EXIT_CODE.success,
+      envelope: withPendingMeta(envelope, pendingCommands),
+      warnings: this.pendingWarnings(pendingCommands),
+      humanLines: ["No local AdRate credential was found."],
+    }
+  }
+
+  private unknownOutcome(
     message: string,
     pendingCommands: number,
-    evidence: AuthRemediationEvidence,
-    extra: JsonObject = {}
+    details: Record<string, unknown> = {},
+    sourceEnvelope?: CliOutcome["envelope"]
   ): CliOutcome {
     const failure = outcomeUnknownFailure(message, {
-      ...remediationDetails(evidence),
-      ...extra,
+      ...details,
       pendingCommandsRetained: pendingCommands,
     })
+    const envelope = sourceEnvelope
+      ? {
+          ...failure.envelope,
+          meta: {
+            ...failure.envelope.meta,
+            requestId: sourceEnvelope.meta.requestId,
+          },
+        }
+      : failure.envelope
     return {
       exitCode: EXIT_CODE.outcomeUnknown,
-      envelope: withPendingMeta(failure.envelope, pendingCommands),
+      envelope: withPendingMeta(envelope, pendingCommands),
       warnings: this.pendingWarnings(pendingCommands, true),
     }
-  }
-
-  private async unsafeLocalStateOutcome(
-    message: string,
-    pendingCommands = 0,
-    evidence?: AuthRemediationEvidence
-  ): Promise<CliOutcome> {
-    const currentEvidence =
-      evidence ?? (await readAuthRemediationEvidence(this.context.local))
-    return this.remoteUnknownOutcome(
-      message,
-      pendingCommands,
-      currentEvidence,
-      { localStatePreserved: true }
-    )
   }
 
   private pendingWarnings(

@@ -8,26 +8,28 @@ import {
 } from "./errors.js"
 import { helpText, parseArguments } from "./parser.js"
 import { withSkillsNotifierInspection } from "./skills/skills-notifier.js"
-import { withUpdateNotifierInspection } from "./notices/update-notifier.js"
 import { SecureFileLockBusyError } from "./storage/secure-files.js"
 import type { AuthService } from "./auth/auth-service.js"
-import type { LogoutPostRenderAcknowledgement } from "./auth/logout-delivery-journal.js"
 import type { ReadCommandService } from "./commands/read-service.js"
 import type { CommandQueryService } from "./commands/command-query-service.js"
 import type { CommandResumeService } from "./commands/command-resume-service.js"
 import type { PendingCommandService } from "./commands/pending-command-service.js"
 import type { StatusCommandService } from "./commands/status-command-service.js"
+import type { FeedbackCommandService } from "./commands/feedback-command-service.js"
 import type { CliEnvelope } from "./contracts/envelope.js"
 import type { CliOutcome } from "./errors.js"
 import type { SkillsNotifier } from "./skills/skills-notifier.js"
+import type { SkillsInstallService } from "./skills/skills-install-service.js"
 import type { SkillsService } from "./skills/skills-service.js"
-import type { UpdateNotifier } from "./notices/update-notifier.js"
 
 export interface CliExecution {
   outcome: CliOutcome<CliEnvelope>
   json: boolean
   verbose: boolean
-  postRenderAcknowledgement?: LogoutPostRenderAcknowledgement
+}
+
+export interface CliExecutionOutput {
+  emitStdoutLine: (line: string) => void
 }
 
 export interface CliCommandServices {
@@ -35,11 +37,9 @@ export interface CliCommandServices {
   commandQuery: Pick<CommandQueryService, "get">
   pendingCommands: Pick<PendingCommandService, "pending">
   commandResume: Pick<CommandResumeService, "resume">
+  feedback: Pick<FeedbackCommandService, "submit">
   skills: Pick<SkillsService, "list" | "read">
-}
-
-interface CommandExecution extends CliExecution {
-  updateNotifierEligible: boolean
+  skillsInstall: Pick<SkillsInstallService, "install">
 }
 
 export class CliApplication {
@@ -47,13 +47,14 @@ export class CliApplication {
     private readonly auth: AuthService,
     private readonly reads: ReadCommandService,
     private readonly commands: CliCommandServices,
-    private readonly skillsNotifier?: Pick<SkillsNotifier, "inspect">,
-    private readonly updateNotifier?: Pick<UpdateNotifier, "inspect">
+    private readonly skillsNotifier?: Pick<SkillsNotifier, "inspect">
   ) {}
 
-  async execute(argv: ReadonlyArray<string>): Promise<CliExecution> {
-    const commandExecution = await this.executeCommand(argv)
-    const { updateNotifierEligible, ...execution } = commandExecution
+  async execute(
+    argv: ReadonlyArray<string>,
+    output?: CliExecutionOutput
+  ): Promise<CliExecution> {
+    const execution = await this.executeCommand(argv, output)
     let outcome = execution.outcome
     if (this.skillsNotifier) {
       try {
@@ -68,36 +69,15 @@ export class CliApplication {
         })
       }
     }
-    if (this.updateNotifier) {
-      try {
-        outcome = withUpdateNotifierInspection(
-          outcome,
-          updateNotifierEligible
-            ? await this.updateNotifier.inspect()
-            : { notice: null, warning: null, diagnostic: null },
-          execution.verbose
-        )
-      } catch {
-        outcome = withUpdateNotifierInspection(
-          outcome,
-          {
-            notice: null,
-            warning: null,
-            diagnostic: "Update check skipped after an unexpected failure.",
-          },
-          execution.verbose
-        )
-      }
-    }
     return { ...execution, outcome }
   }
 
   private async executeCommand(
-    argv: ReadonlyArray<string>
-  ): Promise<CommandExecution> {
+    argv: ReadonlyArray<string>,
+    output?: CliExecutionOutput
+  ): Promise<CliExecution> {
     let json = argv.includes("--json")
     let verbose = argv.includes("--verbose")
-    let updateNotifierEligible = false
     try {
       const invocation = parseArguments(argv)
       json = invocation.global.json
@@ -116,7 +96,6 @@ export class CliApplication {
         return {
           json,
           verbose,
-          updateNotifierEligible,
           outcome: {
             exitCode: EXIT_CODE.success,
             envelope: createLocalSuccess(localRequestId(), {
@@ -132,7 +111,6 @@ export class CliApplication {
         return {
           json,
           verbose,
-          updateNotifierEligible,
           outcome: {
             exitCode: EXIT_CODE.success,
             envelope: createLocalSuccess(localRequestId(), { help: text }),
@@ -141,20 +119,21 @@ export class CliApplication {
           },
         }
       }
-      updateNotifierEligible =
-        invocation.command.kind === "auth.status" ||
-        invocation.command.kind === "capabilities" ||
-        invocation.command.kind === "skills.list"
       let outcome: CliOutcome<CliEnvelope>
-      let postRenderAcknowledgement: LogoutPostRenderAcknowledgement | undefined
       switch (invocation.command.kind) {
         case "auth.login":
-          outcome = await this.auth.login({
-            global: invocation.global,
-            noWait: invocation.command.noWait,
-            resume: invocation.command.resume,
-            deviceName: invocation.command.deviceName,
-          })
+          {
+            const loginInput = {
+              global: invocation.global,
+              noWait: invocation.command.noWait,
+              resume: invocation.command.resume,
+              device: invocation.command.device,
+              deviceName: invocation.command.deviceName,
+            }
+            outcome = output
+              ? await this.auth.login(loginInput, output.emitStdoutLine)
+              : await this.auth.login(loginInput)
+          }
           break
         case "auth.status":
           outcome = await this.auth.status(invocation.global)
@@ -163,15 +142,7 @@ export class CliApplication {
           outcome = await this.auth.whoami(invocation.global)
           break
         case "auth.logout":
-          {
-            const logout = await this.auth.logout(invocation.global)
-            const {
-              postRenderAcknowledgement: acknowledgement,
-              ...renderableOutcome
-            } = logout
-            postRenderAcknowledgement = acknowledgement
-            outcome = renderableOutcome
-          }
+          outcome = await this.auth.logout(invocation.global)
           break
         case "ads.campaigns.status":
           outcome = await this.commands.campaignStatus.status({
@@ -199,6 +170,18 @@ export class CliApplication {
             requestId: invocation.global.requestId,
           })
           break
+        case "feedback.submit":
+          outcome = await this.commands.feedback.submit({
+            category: invocation.command.category,
+            message: invocation.command.message,
+            messageStdin: invocation.command.messageStdin,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "skills.install":
+          outcome = await this.commands.skillsInstall.install()
+          break
         case "skills.list":
           outcome = await this.commands.skills.list()
           break
@@ -224,8 +207,6 @@ export class CliApplication {
         outcome,
         json,
         verbose,
-        updateNotifierEligible,
-        ...(postRenderAcknowledgement ? { postRenderAcknowledgement } : {}),
       }
     } catch (error) {
       const failure =
@@ -242,7 +223,6 @@ export class CliApplication {
       return {
         json,
         verbose,
-        updateNotifierEligible,
         outcome: {
           exitCode: failure.exitCode,
           envelope: failure.envelope,

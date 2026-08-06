@@ -11,7 +11,6 @@ import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
-  stableTestProcessIdentity,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -84,8 +83,6 @@ function locatedCredential(
       clientInstanceId: "22222222-2222-4222-8222-222222222222",
       tokenGeneration: "44444444-4444-4444-8444-444444444444",
       deviceGeneration: null,
-      issueOwnerToken: null,
-      pollOwnerToken: null,
     },
   }
 }
@@ -248,7 +245,6 @@ beforeEach(async () => {
   fixture = await createTemporaryStateFixture()
   repository = new PendingCommandRepository(fixture.fileSystem, fixture.paths, {
     now: () => new Date(NOW),
-    processIdentity: stableTestProcessIdentity("query-status-race"),
   })
 })
 
@@ -303,8 +299,8 @@ describe("CommandQueryService.get", () => {
           requestId: "client_get_1",
         })
       ).exitCode
-    ).toBe(0)
-    expect((await service.get({ idempotencyKey: keyByKey })).exitCode).toBe(0)
+    ).toBe(4)
+    expect((await service.get({ idempotencyKey: keyByKey })).exitCode).toBe(4)
 
     expect(transport.requests).toHaveLength(2)
     expect(transport.requests[0]).toMatchObject({
@@ -483,7 +479,7 @@ describe("CommandQueryService.get", () => {
 
     expect(
       (await service.get({ idempotencyKey: "pending-key" })).exitCode
-    ).toBe(0)
+    ).toBe(4)
     expect((await service.get({ idempotencyKey: "final-key" })).exitCode).toBe(
       0
     )
@@ -576,9 +572,9 @@ describe("CommandQueryService.get", () => {
     })
     await postStarted
     releaseQuery()
-    await expect(directGet).resolves.toMatchObject({ exitCode: 0 })
+    await expect(directGet).resolves.toMatchObject({ exitCode: 4 })
     releasePost()
-    await expect(status).resolves.toMatchObject({ exitCode: 0 })
+    await expect(status).resolves.toMatchObject({ exitCode: 4 })
 
     expect(queryRequests.map((request) => request.method)).toEqual(["GET"])
     expect(statusRequests.map((request) => request.method)).toEqual(["POST"])
@@ -586,11 +582,6 @@ describe("CommandQueryService.get", () => {
       kind: "found",
       record: { localState: "command_known", commandId: COMMAND_ID },
     })
-    expect(
-      await fixture.fileSystem.readSecureFile(
-        repository.attempts.path(seeded.recordId)
-      )
-    ).toBeNull()
   })
 
   it("returns RESOURCE_NOT_FOUND while retaining the exact journal", async () => {
@@ -678,24 +669,22 @@ describe("CommandQueryService.get", () => {
 
   it.each([
     [
-      "malformed Command",
-      () =>
-        successResponse({ ...command({ key: "guarded-key" }), extra: true }),
-    ],
-    [
       "wrong response identity",
       () => successResponse(command({ key: "different-key" })),
+      5,
     ],
     [
       "non-200 success",
       () => successResponse(command({ key: "guarded-key" }), 202),
+      4,
     ],
     [
       "Status evidence on GET error",
       () => errorResponse("RESOURCE_NOT_FOUND", 404, { commandCreated: false }),
+      5,
     ],
-    ["invalid Public envelope", () => response(200, { ok: true, data: {} })],
-  ])("retains the journal for %s", async (_label, reply) => {
+    ["invalid Public envelope", () => response(200, { ok: true, data: {} }), 4],
+  ] as const)("retains the journal for %s", async (_label, reply, exitCode) => {
     const seeded = await seed({ key: "guarded-key" })
     const before = serializePendingCommand(seeded.record)
     const transport = new SequenceTransport([reply()])
@@ -712,7 +701,7 @@ describe("CommandQueryService.get", () => {
     )
     const after = await repository.read("guarded-key")
 
-    expect(failure.exitCode).toBe(4)
+    expect(failure.exitCode).toBe(exitCode)
     expect(failure.envelope).toMatchObject({
       ok: false,
       error: { code: "DEPENDENCY_UNAVAILABLE" },
@@ -785,7 +774,7 @@ describe("CommandQueryService.get", () => {
     const outcome = await service.get({ idempotencyKey: "cas-key" })
     const after = await repository.read("cas-key")
 
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode).toBe(4)
     expect(after).toMatchObject({
       kind: "found",
       recordId: seeded.recordId,

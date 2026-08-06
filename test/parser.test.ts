@@ -59,6 +59,10 @@ describe("parseArguments", () => {
       ["commands", "resume", "--idempotency-key", "resume_key"],
       "commands.resume",
     ],
+    [
+      ["feedback", "--category", "bug", "--message", "Something failed"],
+      "feedback.submit",
+    ],
   ] as const)("解析命令 %j", (argv, kind) => {
     expect(parseArguments(argv).command?.kind).toBe(kind)
   })
@@ -124,10 +128,21 @@ describe("parseArguments", () => {
         kind: "auth.login",
         noWait: false,
         resume: true,
+        device: false,
+      }
+    )
+    expect(parseArguments(["auth", "login", "--device"]).command).toMatchObject(
+      {
+        kind: "auth.login",
+        noWait: false,
+        resume: false,
+        device: true,
       }
     )
     expectUsageFailure(["auth", "login", "--no-wait", "--resume"])
     expectUsageFailure(["auth", "login", "--test", "--resume"])
+    expectUsageFailure(["auth", "login", "--device", "--no-wait"])
+    expectUsageFailure(["auth", "login", "--device", "--resume"])
     expectUsageFailure(["auth", "login", "--no-input"])
     expectUsageFailure([
       "auth",
@@ -224,6 +239,57 @@ describe("parseArguments", () => {
     })
   })
 
+  it("解析反馈 argv/stdin 互斥输入，前导 -- 文本通过等号形态保持字面值", () => {
+    expect(
+      parseArguments([
+        "feedback",
+        "--category",
+        "blocked",
+        "--message=--leading quote '$()'\nnext",
+        "--idempotency-key",
+        "feedback_key",
+      ])
+    ).toMatchObject({
+      global: { idempotencyKey: "feedback_key" },
+      command: {
+        kind: "feedback.submit",
+        category: "blocked",
+        message: "--leading quote '$()'\nnext",
+        messageStdin: false,
+      },
+    })
+    expect(
+      parseArguments([
+        "feedback",
+        "--category",
+        "suggestion",
+        "--message-stdin",
+      ]).command
+    ).toEqual({
+      kind: "feedback.submit",
+      category: "suggestion",
+      message: undefined,
+      messageStdin: true,
+    })
+
+    for (const argv of [
+      ["feedback", "--message", "missing category"],
+      ["feedback", "--category", "future", "--message", "text"],
+      ["feedback", "--category", "bug"],
+      [
+        "feedback",
+        "--category",
+        "bug",
+        "--message",
+        "text",
+        "--message-stdin",
+      ],
+      ["feedback", "extra", "--category", "bug", "--message", "text"],
+    ]) {
+      expectUsageFailure(argv)
+    }
+  })
+
   it("T10 必填、selector 冲突、多余 positional 和 --test 全部本地拒绝", () => {
     for (const argv of [
       [
@@ -289,6 +355,10 @@ describe("parseArguments", () => {
     expect(parseArguments(["commands", "resume", "--help"])).toMatchObject({
       help: true,
       helpTopic: "commands resume",
+    })
+    expect(parseArguments(["feedback", "--help"])).toMatchObject({
+      help: true,
+      helpTopic: "feedback",
     })
     expectUsageFailure([
       "commands",
@@ -385,6 +455,7 @@ describe("helpText", () => {
       "commands get",
       "commands pending",
       "commands resume",
+      "feedback",
     ]) {
       expect(help).toContain(command)
     }
@@ -403,11 +474,11 @@ describe("helpText", () => {
     expect(help).not.toContain("--base-url")
     expect(help).not.toContain("--token")
     expect(help).toContain("npm install -g @adrate/cli")
-    expect(help).toContain("npx skills add AdRate-io/cli -g -y")
+    expect(help).toContain("adrate skills install")
   })
 
   it.each([
-    ["auth login", "--no-wait|--resume"],
+    ["auth login", "--no-wait|--resume|--device"],
     ["auth status", "local_incomplete"],
     ["auth whoami", "/public/v1/me"],
     ["auth logout", "Pending Command evidence is preserved"],
@@ -421,6 +492,7 @@ describe("helpText", () => {
     ["commands get", "--command-id <uuid>"],
     ["commands pending", "protected local pending-command directory"],
     ["commands resume", "only when the server proves no Command exists"],
+    ["feedback", "--message-stdin"],
   ])("命令帮助 %s 包含必要合同", (topic, expected) => {
     const help = helpText(topic)
     expect(help).toContain("Usage:")
@@ -430,7 +502,7 @@ describe("helpText", () => {
     expect(help).toContain("M0 boundary:")
     expect(help).toContain("No team switching")
     expect(help).toContain("npm install -g @adrate/cli")
-    expect(help).toContain("npx skills add AdRate-io/cli -g -y")
+    expect(help).toContain("adrate skills install")
   })
 
   it.each([
@@ -462,6 +534,20 @@ describe("helpText", () => {
       "GMV Max",
     ]) {
       expect(help).toContain(unsupported)
+    }
+  })
+
+  it("反馈帮助冻结隐私边界、自动元数据与服务端清洗局限", () => {
+    const help = helpText("feedback")
+    for (const required of [
+      "Authorization/Cookie",
+      "TikTok access tokens",
+      "shell history or argv",
+      "platform-architecture",
+      "never hostname, cwd, paths",
+      "cannot prove that a message is safe",
+    ]) {
+      expect(help).toContain(required)
     }
   })
 })
