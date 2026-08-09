@@ -1,4 +1,4 @@
 interface:
   display_name: "AdRate Shared Safety"
-  short_description: "Safe authentication, feedback, recovery, and CLI operation"
-  default_prompt: "Use $adrate-shared to operate AdRate CLI safely, submit explicit feedback, and recover ambiguous results."
+  short_description: "Safe auth, Command recovery, receipt replay, and feedback"
+  default_prompt: "Use $adrate-shared to operate AdRate CLI safely and recover Command or receipt-backed write outcomes correctly."

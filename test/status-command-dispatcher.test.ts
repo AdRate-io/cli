@@ -6,6 +6,7 @@ import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
+  statusIntent,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -63,12 +64,8 @@ async function preparedRecord() {
     credentialId: CREDENTIAL_ID,
     issuerOrigin: "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
-      campaignId: "80001",
-      desiredStatus: "ENABLE",
-      authId: 9,
-    },
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent({ authId: 9 }),
     now: CREATED_AT,
   })
   if (result.kind !== "created") throw new Error("Expected prepared record")

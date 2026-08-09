@@ -7,7 +7,7 @@ import { AuthCleanupCoordinator } from "../src/auth/auth-cleanup-coordinator.js"
 import { DevicePollCoordinator } from "../src/auth/device-poll-coordinator.js"
 import { LocalCredentialCoordinator } from "../src/auth/local-credentials.js"
 import { CliApplication } from "../src/application.js"
-import { M0_SCOPE } from "../src/constants.js"
+import { CLI_SCOPE } from "../src/constants.js"
 import { HttpTransportError, PublicHttpClient } from "../src/http/client.js"
 import { renderOutcome } from "../src/output.js"
 import { runCli } from "../src/runner.js"
@@ -314,7 +314,7 @@ function enqueueMe(
           idleExpiresAt: "2026-07-31T03:00:00.000Z",
           absoluteExpiresAt: "2026-08-30T02:00:00.000Z",
         },
-        capabilities: M0_SCOPE.split(" ").map((capabilityId, index) => ({
+        capabilities: CLI_SCOPE.split(" ").map((capabilityId, index) => ({
           capabilityId,
           granted: true,
           available: true,
@@ -617,7 +617,7 @@ describe("Device Authorization", () => {
     }
   )
 
-  it("issues the exact M0-scope request and never exposes device_code", async () => {
+  it("issues the exact CLI scope request and never exposes device_code", async () => {
     const harness = await createHarness()
     let acquiredDuringRequest = false
     enqueueDeviceCode(harness, () =>
@@ -639,7 +639,7 @@ describe("Device Authorization", () => {
     expect(request.path).toBe("/oauth/device/code")
     expect(request.deadlineMs).toBe(15_000)
     expect(request.form?.get("client_id")).toBe("adrate-cli")
-    expect(request.form?.get("scope")).toBe(M0_SCOPE)
+    expect(request.form?.get("scope")).toBe(CLI_SCOPE)
     expect(request.form?.get("device_name")).toBe("test-device")
     expect(request.form?.get("client_instance_id")).toMatch(/^[0-9a-f-]{36}$/)
 
@@ -1537,7 +1537,7 @@ describe("auth status and logout", () => {
             kind: "owner_cli_session",
             credentialId: "99999999-9999-4999-8999-999999999999",
           },
-          capabilities: M0_SCOPE.split(" "),
+          capabilities: CLI_SCOPE.split(" "),
         },
         meta: {
           requestId: input.requestId ?? "server_request_1",
@@ -1702,15 +1702,16 @@ describe("auth status and logout", () => {
         },
       })
 
-      const outcome = (await (command === "status"
-        ? harness.auth.status(GLOBAL)
-        : command === "whoami"
-          ? harness.auth.whoami(GLOBAL)
-          : harness.auth.login({
-              global: GLOBAL,
-              noWait: false,
-              resume: true,
-            })
+      const outcome = (await (
+        command === "status"
+          ? harness.auth.status(GLOBAL)
+          : command === "whoami"
+            ? harness.auth.whoami(GLOBAL)
+            : harness.auth.login({
+                global: GLOBAL,
+                noWait: false,
+                resume: true,
+              })
       ).catch((error: unknown) => error)) as CliOutcome | CliFailure
 
       expect(outcome.exitCode).toBe(4)
@@ -1822,8 +1823,8 @@ describe("auth status and logout", () => {
 
   it.each(
     (["confirmed_inactive", "unknown"] as const).flatMap((remoteOutcome) =>
-      (["keychain"] as const).map((failurePoint) =>
-        [remoteOutcome, failurePoint] as const
+      (["keychain"] as const).map(
+        (failurePoint) => [remoteOutcome, failurePoint] as const
       )
     )
   )(

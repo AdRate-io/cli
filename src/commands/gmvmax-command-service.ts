@@ -15,37 +15,46 @@ import {
   localRequestId,
   usageFailure,
 } from "../errors.js"
+import { BUDGET_MODES } from "./command-families.js"
 import { StatusCommandDispatcher } from "./status-command-dispatcher.js"
 import type { LocalCredentialCoordinator } from "../auth/local-credentials.js"
 import type { CliExitCode } from "../constants.js"
+import type { CliEnvelope, LocalErrorEnvelope } from "../contracts/envelope.js"
 import type { JsonObject } from "../contracts/json.js"
+import type { CliOutcome } from "../errors.js"
 import type { PublicHttpClient } from "../http/client.js"
 import type {
   PendingCommandPrepareResult,
   PendingCommandRepository,
 } from "./pending-command-repository.js"
-import type { CliOutcome } from "../errors.js"
-import type {
-  CliEnvelope,
-  LocalErrorCode,
-  LocalErrorEnvelope,
-} from "../contracts/envelope.js"
 
-export interface StatusCommandInput {
+interface GmvMaxCommandInput {
   advId?: string
   campaignId?: string
-  desiredStatus?: string
   authId?: string
   idempotencyKey?: string
   requestId?: string
 }
 
-interface ValidatedStatusCommandInput {
+export interface GmvMaxStatusCommandInput extends GmvMaxCommandInput {
+  desiredStatus?: string
+}
+
+export interface GmvMaxNumericCommandInput extends GmvMaxCommandInput {
+  mode?: string
+  value?: string
+}
+
+interface ValidatedGmvMaxCommandInput {
+  capabilityId:
+    | "gmvmax.campaign.status.write"
+    | "gmvmax.campaign.budget.write"
+    | "gmvmax.campaign.roas.write"
   advId: string
   campaignId: string
-  desiredStatus: "ENABLE" | "DISABLE"
-  authId: number | null
+  authId: number
   idempotencyKey: string
+  familyPayload: Record<string, unknown>
   requestId?: string
 }
 
@@ -54,10 +63,10 @@ function required(value: string | undefined, flag: string): string {
   return value
 }
 
-function validateStatusCommandInput(
-  input: StatusCommandInput,
+function validateCommon(
+  input: GmvMaxCommandInput,
   generateIdempotencyKey: () => string
-): ValidatedStatusCommandInput {
+): Omit<ValidatedGmvMaxCommandInput, "capabilityId" | "familyPayload"> {
   const advId = requireTransportableResourceId(
     required(input.advId, "--adv-id"),
     "advId"
@@ -66,14 +75,10 @@ function validateStatusCommandInput(
     required(input.campaignId, "--campaign-id"),
     "campaignId"
   )
-  const desiredStatus = required(input.desiredStatus, "--set")
-  if (desiredStatus !== "enable" && desiredStatus !== "disable") {
-    throw usageFailure("--set must be enable or disable.")
-  }
-  const authId =
-    input.authId === undefined
-      ? null
-      : parsePositiveInteger(input.authId, "--auth-id")
+  const authId = parsePositiveInteger(
+    required(input.authId, "--auth-id"),
+    "--auth-id"
+  )
   const idempotencyKey = input.idempotencyKey ?? generateIdempotencyKey()
   if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
     throw usageFailure("--idempotency-key must match ^[A-Za-z0-9_-]{1,128}$.")
@@ -87,15 +92,62 @@ function validateStatusCommandInput(
   return {
     advId,
     campaignId,
-    desiredStatus: desiredStatus === "enable" ? "ENABLE" : "DISABLE",
     authId,
     idempotencyKey,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
   }
 }
 
+function validateStatus(
+  input: GmvMaxStatusCommandInput,
+  generateIdempotencyKey: () => string
+): ValidatedGmvMaxCommandInput {
+  const desiredStatus = required(input.desiredStatus, "--set")
+  if (desiredStatus !== "enable" && desiredStatus !== "disable") {
+    throw usageFailure("--set must be enable or disable.")
+  }
+  return {
+    capabilityId: "gmvmax.campaign.status.write",
+    ...validateCommon(input, generateIdempotencyKey),
+    familyPayload: {
+      desiredStatus: desiredStatus === "enable" ? "ENABLE" : "DISABLE",
+    },
+  }
+}
+
+function validateNumeric(
+  input: GmvMaxNumericCommandInput,
+  operation: "budget" | "roas",
+  generateIdempotencyKey: () => string
+): ValidatedGmvMaxCommandInput {
+  const mode = required(input.mode, "--mode")
+  if (!BUDGET_MODES.has(mode)) {
+    throw usageFailure(
+      "--mode must be set, increase_amount, decrease_amount, increase_percent, or decrease_percent."
+    )
+  }
+  const value = Number(required(input.value, "--value"))
+  if (!Number.isFinite(value) || value <= 0) {
+    throw usageFailure("--value must be a positive number.")
+  }
+  const precision = operation === "budget" ? 100 : 10
+  if (Math.round(value * precision) / precision !== value) {
+    throw usageFailure(
+      `--value must have at most ${operation === "budget" ? "two" : "one"} decimal place${operation === "budget" ? "s" : ""}.`
+    )
+  }
+  if (mode === "decrease_percent" && value >= 100) {
+    throw usageFailure("--value must be below 100 for decrease_percent.")
+  }
+  return {
+    capabilityId: `gmvmax.campaign.${operation}.write`,
+    ...validateCommon(input, generateIdempotencyKey),
+    familyPayload: { mode, value },
+  }
+}
+
 function localCommandFailure(
-  code: LocalErrorCode,
+  code: LocalErrorEnvelope["error"]["code"],
   exitCode: CliExitCode,
   message: string,
   details: JsonObject = {}
@@ -116,10 +168,7 @@ function prepareFailure(
         "LOCAL_PENDING_COMMAND_EXISTS",
         EXIT_CODE.usage,
         "A matching pending Command already exists; use commands resume.",
-        {
-          recordId: result.recordId,
-          suggestedAction: "resume_command",
-        }
+        { recordId: result.recordId, suggestedAction: "resume_command" }
       )
     case "prior_credential":
       return localCommandFailure(
@@ -164,7 +213,7 @@ function prepareFailure(
   }
 }
 
-export class StatusCommandService {
+export class GmvMaxCommandService {
   private readonly now: () => Date
   private readonly generateIdempotencyKey: () => string
   private readonly dispatcher: Pick<StatusCommandDispatcher, "dispatch">
@@ -191,12 +240,26 @@ export class StatusCommandService {
       })
   }
 
-  async status(input: StatusCommandInput): Promise<CliOutcome<CliEnvelope>> {
-    // 这是本命令的唯一输入闸门：完成前不得读凭证、加锁或落盘。
-    const validated = validateStatusCommandInput(
-      input,
-      this.generateIdempotencyKey
+  status(input: GmvMaxStatusCommandInput): Promise<CliOutcome<CliEnvelope>> {
+    return this.execute(validateStatus(input, this.generateIdempotencyKey))
+  }
+
+  budget(input: GmvMaxNumericCommandInput): Promise<CliOutcome<CliEnvelope>> {
+    return this.execute(
+      validateNumeric(input, "budget", this.generateIdempotencyKey)
     )
+  }
+
+  roas(input: GmvMaxNumericCommandInput): Promise<CliOutcome<CliEnvelope>> {
+    return this.execute(
+      validateNumeric(input, "roas", this.generateIdempotencyKey)
+    )
+  }
+
+  private async execute(
+    input: ValidatedGmvMaxCommandInput
+  ): Promise<CliOutcome<CliEnvelope>> {
+    // 所有纯本地参数校验均已完成，只有这里才允许触碰凭证与 pending journal。
     const located = await this.local.requireLocated()
     if (!located.credentials) {
       throw authenticationFailure(
@@ -204,28 +267,25 @@ export class StatusCommandService {
       )
     }
     const prepared = await this.pending.prepare({
-      idempotencyKey: validated.idempotencyKey,
-      capabilityId: "ads.campaign.status.write",
+      idempotencyKey: input.idempotencyKey,
+      capabilityId: input.capabilityId,
       credentialId: located.index.credentialId,
       issuerOrigin: located.index.issuerOrigin,
       teamId: located.credentials.teamId,
       intent: {
-        capabilityId: "ads.campaign.status.write",
-        advId: validated.advId,
-        campaignId: validated.campaignId,
-        authId: validated.authId,
-        familyPayload: { desiredStatus: validated.desiredStatus },
+        capabilityId: input.capabilityId,
+        advId: input.advId,
+        campaignId: input.campaignId,
+        authId: input.authId,
+        familyPayload: input.familyPayload,
       },
       now: this.now(),
     })
     if (prepared.kind !== "created") throw prepareFailure(prepared)
-
     return this.dispatcher.dispatch({
       record: prepared.record,
       expectedCredential: located,
-      ...(validated.requestId === undefined
-        ? {}
-        : { requestId: validated.requestId }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     })
   }
 }

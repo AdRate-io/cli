@@ -8,7 +8,7 @@ import type {
   CredentialMetadata,
   TokenIndex,
 } from "../storage/schemas.js"
-import type { JsonObject } from "../contracts/json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CliOutcome } from "../errors.js"
 import type { LocalErrorEnvelope } from "../contracts/envelope.js"
 import type {
@@ -34,10 +34,11 @@ export type PendingCommandBlockedReason =
   | null
 
 export interface PendingCommandIntentView extends JsonObject {
+  capabilityId: string
   advId: string
   campaignId: string
-  desiredStatus: "ENABLE" | "DISABLE"
   authId: number | null
+  [key: string]: JsonValue | undefined
 }
 
 export interface PendingCommandLastResponseView extends JsonObject {
@@ -49,7 +50,7 @@ export interface PendingCommandLastResponseView extends JsonObject {
 export interface PendingCommandView extends JsonObject {
   recordId: string
   idempotencyKey: string
-  capabilityId: "ads.campaign.status.write"
+  capabilityId: string
   credentialKind: "owner_cli_session"
   credentialId: string
   issuerOrigin: string
@@ -187,10 +188,11 @@ function mapRecord(
     issuerOrigin: record.issuerOrigin,
     teamId: record.teamId,
     intent: {
+      capabilityId: record.intent.capabilityId,
       advId: record.intent.advId,
       campaignId: record.intent.campaignId,
-      desiredStatus: record.intent.desiredStatus,
       authId: record.intent.authId,
+      ...record.intent.familyPayload,
     },
     localState: record.localState,
     commandId: record.commandId,

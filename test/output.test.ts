@@ -355,6 +355,60 @@ describe("renderOutcome", () => {
     expect(output).toContain("future_action")
   })
 
+  it("human validationErrors 按行安全输出并最多展示 50 项", () => {
+    const stdout = captureStream()
+    const stderr = captureStream()
+    const envelope = errorEnvelope("INVALID_REQUEST", false)
+    envelope.error.details = {
+      validationErrors: Array.from({ length: 52 }, (_, index) => ({
+        path: index === 0 ? "pipelines[0]\u001b[31m" : `pipelines[${index}]`,
+        code: "invalid_value",
+        message: index === 0 ? "bad\nvalue" : `Failure ${index}`,
+        secret: "MUST_NOT_LEAK",
+      })),
+    }
+
+    renderOutcome(
+      outcomeFromEnvelope(envelope),
+      { json: false, verbose: false },
+      { stdout: stdout.stream, stderr: stderr.stream }
+    )
+
+    const output = stderr.read()
+    expect(stdout.read()).toBe("")
+    expect(output).toContain("Validation errors:\n")
+    expect(output).toContain(
+      '- path="pipelines[0]\\u001b[31m" code="invalid_value" message="bad\\nvalue"\n'
+    )
+    expect(output).toContain("2 additional validation error(s) omitted")
+    expect(output).not.toContain("pipelines[50]")
+    expect(output).not.toContain("MUST_NOT_LEAK")
+    expect(output).not.toContain("\u001b")
+  })
+
+  it("human validationErrors 忽略非法或超长条目", () => {
+    const stdout = captureStream()
+    const stderr = captureStream()
+    const envelope = errorEnvelope("INVALID_REQUEST", false)
+    envelope.error.details = {
+      validationErrors: [
+        { path: "name", code: "required", message: "Name is required." },
+        { path: "x", code: "invalid", message: "x".repeat(513) },
+        { path: "y", code: 42, message: "invalid" },
+      ],
+    }
+    renderOutcome(
+      outcomeFromEnvelope(envelope),
+      { json: false, verbose: false },
+      { stdout: stdout.stream, stderr: stderr.stream }
+    )
+    expect(stderr.read()).toContain(
+      '- path="name" code="required" message="Name is required."\n'
+    )
+    expect(stderr.read()).not.toContain('path="x"')
+    expect(stderr.read()).not.toContain('path="y"')
+  })
+
   it("JSON 错误仍保持一个机读信封，不混入 human 文案", () => {
     const stdout = captureStream()
     const stderr = captureStream()

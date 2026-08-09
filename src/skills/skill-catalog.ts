@@ -15,7 +15,7 @@ import type { ReadSkillFile } from "./skill-path-reader.js"
 
 export class UnknownSkillError extends Error {
   constructor() {
-    super("The requested Skill is not in the M0 catalog.")
+    super("The requested Skill is not in the CLI catalog.")
     this.name = "UnknownSkillError"
   }
 }

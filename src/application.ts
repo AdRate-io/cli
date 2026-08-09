@@ -14,8 +14,12 @@ import type { ReadCommandService } from "./commands/read-service.js"
 import type { CommandQueryService } from "./commands/command-query-service.js"
 import type { CommandResumeService } from "./commands/command-resume-service.js"
 import type { PendingCommandService } from "./commands/pending-command-service.js"
+import type { BudgetCommandService } from "./commands/budget-command-service.js"
 import type { StatusCommandService } from "./commands/status-command-service.js"
+import type { GmvMaxCommandService } from "./commands/gmvmax-command-service.js"
 import type { FeedbackCommandService } from "./commands/feedback-command-service.js"
+import type { RuleCommandService } from "./commands/rule-command-service.js"
+import type { CopyCommandService } from "./commands/copy-command-service.js"
 import type { CliEnvelope } from "./contracts/envelope.js"
 import type { CliOutcome } from "./errors.js"
 import type { SkillsNotifier } from "./skills/skills-notifier.js"
@@ -34,10 +38,17 @@ export interface CliExecutionOutput {
 
 export interface CliCommandServices {
   campaignStatus: Pick<StatusCommandService, "status">
+  campaignBudget: Pick<BudgetCommandService, "budget">
+  gmvMax: Pick<GmvMaxCommandService, "status" | "budget" | "roas">
   commandQuery: Pick<CommandQueryService, "get">
   pendingCommands: Pick<PendingCommandService, "pending">
   commandResume: Pick<CommandResumeService, "resume">
   feedback: Pick<FeedbackCommandService, "submit">
+  copy: Pick<CopyCommandService, "submit" | "preview">
+  rules: Pick<
+    RuleCommandService,
+    "create" | "update" | "enable" | "disable" | "delete" | "dryRun"
+  >
   skills: Pick<SkillsService, "list" | "read">
   skillsInstall: Pick<SkillsInstallService, "install">
 }
@@ -102,7 +113,7 @@ export class CliApplication {
               version: CLI_VERSION,
             }),
             warnings: [],
-            humanLines: [CLI_VERSION],
+            humanOutput: { stream: "stdout", mode: "line", value: CLI_VERSION },
           },
         }
       }
@@ -154,6 +165,49 @@ export class CliApplication {
             requestId: invocation.global.requestId,
           })
           break
+        case "ads.campaigns.budget":
+          outcome = await this.commands.campaignBudget.budget({
+            advId: invocation.command.advId,
+            campaignId: invocation.command.campaignId,
+            mode: invocation.command.mode,
+            value: invocation.command.value,
+            authId: invocation.command.authId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "gmvmax.campaigns.status":
+          outcome = await this.commands.gmvMax.status({
+            advId: invocation.command.advId,
+            campaignId: invocation.command.campaignId,
+            desiredStatus: invocation.command.desiredStatus,
+            authId: invocation.command.authId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "gmvmax.campaigns.budget":
+          outcome = await this.commands.gmvMax.budget({
+            advId: invocation.command.advId,
+            campaignId: invocation.command.campaignId,
+            mode: invocation.command.mode,
+            value: invocation.command.value,
+            authId: invocation.command.authId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "gmvmax.campaigns.roas":
+          outcome = await this.commands.gmvMax.roas({
+            advId: invocation.command.advId,
+            campaignId: invocation.command.campaignId,
+            mode: invocation.command.mode,
+            value: invocation.command.value,
+            authId: invocation.command.authId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
         case "commands.get":
           outcome = await this.commands.commandQuery.get({
             commandId: invocation.command.commandId,
@@ -179,6 +233,65 @@ export class CliApplication {
             requestId: invocation.global.requestId,
           })
           break
+        case "ads.copy.submit":
+          outcome = await this.commands.copy.submit({
+            file: invocation.command.file,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "ads.copy.preview":
+          outcome = await this.commands.copy.preview({
+            file: invocation.command.file,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.create":
+          outcome = await this.commands.rules.create({
+            file: invocation.command.file,
+            stdin: invocation.command.stdin,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.update":
+          outcome = await this.commands.rules.update({
+            ruleId: invocation.command.ruleId,
+            file: invocation.command.file,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.enable":
+          outcome = await this.commands.rules.enable({
+            ruleId: invocation.command.ruleId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.disable":
+          outcome = await this.commands.rules.disable({
+            ruleId: invocation.command.ruleId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.delete":
+          outcome = await this.commands.rules.delete({
+            ruleId: invocation.command.ruleId,
+            idempotencyKey: invocation.global.idempotencyKey,
+            requestId: invocation.global.requestId,
+          })
+          break
+        case "rules.dryrun":
+          outcome = await this.commands.rules.dryRun({
+            ruleId: invocation.command.ruleId,
+            advId: invocation.command.advId,
+            shopId: invocation.command.shopId,
+            campaignId: invocation.command.campaignId,
+            requestId: invocation.global.requestId,
+          })
+          break
         case "skills.install":
           outcome = await this.commands.skillsInstall.install()
           break
@@ -197,6 +310,16 @@ export class CliApplication {
         case "ads.campaigns.list":
         case "ads.campaigns.get":
         case "ads.report.campaigns":
+        case "ads.copy.tasks.list":
+        case "ads.copy.tasks.get":
+        case "gmvmax.stores":
+        case "gmvmax.campaigns.list":
+        case "gmvmax.campaigns.get":
+        case "rules.options":
+        case "rules.list":
+        case "rules.get":
+        case "rules.executions.list":
+        case "rules.executions.get":
           outcome = await this.reads.execute(
             invocation.command,
             invocation.global

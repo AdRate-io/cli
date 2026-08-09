@@ -36,6 +36,14 @@ interface HumanAuthorizationCandidate {
   lastSyncedAt: string
 }
 
+interface HumanValidationError {
+  path: string
+  code: string
+  message: string
+}
+
+const HUMAN_VALIDATION_ERROR_LIMIT = 50
+
 export function exitCodeForEnvelope(envelope: CliEnvelope): 0 | 1 | 2 | 3 | 4 {
   if (envelope.ok) return EXIT_CODE.success
   if (USAGE_CODES.has(envelope.error.code)) return EXIT_CODE.usage
@@ -162,6 +170,38 @@ function safeResolutionUrl(value: unknown): string | null {
   }
 }
 
+function safeValidationErrors(value: unknown): {
+  errors: Array<HumanValidationError>
+  omitted: number
+} | null {
+  if (!Array.isArray(value)) return null
+  const errors: Array<HumanValidationError> = []
+  for (const item of value.slice(0, HUMAN_VALIDATION_ERROR_LIMIT)) {
+    if (
+      !isPlainObject(item) ||
+      typeof item.path !== "string" ||
+      item.path.length > 512 ||
+      typeof item.code !== "string" ||
+      item.code.length > 64 ||
+      typeof item.message !== "string" ||
+      item.message.length > 512
+    ) {
+      continue
+    }
+    errors.push({
+      path: item.path,
+      code: item.code,
+      message: item.message,
+    })
+  }
+  return errors.length > 0
+    ? {
+        errors,
+        omitted: Math.max(0, value.length - HUMAN_VALIDATION_ERROR_LIMIT),
+      }
+    : null
+}
+
 function humanError(error: CliErrorEnvelope): Array<string> {
   const retry =
     error.error.retryable === true ? " The request may succeed later." : ""
@@ -178,6 +218,20 @@ function humanError(error: CliErrorEnvelope): Array<string> {
     for (const candidate of candidates) {
       lines.push(
         `- authId=${candidate.authId} displayName=${JSON.stringify(candidate.displayName)} status=${candidate.status} lastSyncedAt=${candidate.lastSyncedAt}`
+      )
+    }
+  }
+  const validation = safeValidationErrors(error.error.details.validationErrors)
+  if (validation) {
+    lines.push("Validation errors:")
+    for (const item of validation.errors) {
+      lines.push(
+        `- path=${JSON.stringify(item.path)} code=${JSON.stringify(item.code)} message=${JSON.stringify(item.message)}`
+      )
+    }
+    if (validation.omitted > 0) {
+      lines.push(
+        `- ${validation.omitted} additional validation error(s) omitted.`
       )
     }
   }

@@ -2,8 +2,8 @@ import {
   IDEMPOTENCY_KEY_PATTERN,
   LOWERCASE_UUID_PATTERN,
 } from "../constants.js"
+import { decodeCommandTarget } from "../commands/command-families.js"
 import { hasKeys, isPlainObject } from "./json.js"
-import { isValidResourceId } from "./resource-input.js"
 
 export interface PublicCommandDto {
   commandId: string
@@ -11,11 +11,7 @@ export interface PublicCommandDto {
   capabilityId: string
   status: string
   isFinal: boolean
-  target: {
-    advertiserId: string
-    campaignId: string
-    desiredStatus: "ENABLE" | "DISABLE"
-  }
+  target: Record<string, unknown>
   beforeStatus: string | null
   afterStatus: string | null
   verificationBasis: string | null
@@ -28,6 +24,11 @@ function nullableString(value: unknown): value is string | null {
 /**
  * 只投影 CLI 用于身份匹配和成功判定的字段。
  * 服务端展示字段、新状态和附加字段不属于 CLI 的封闭合同。
+ *
+ * target 解码按 capabilityId 分派到家族注册表：
+ * - status 家族：{ advertiserId, campaignId, desiredStatus }
+ * - budget 家族：{ advertiserId, campaignId, mode, value, targetBudget? }
+ * 未注册的 capabilityId → null（fail-closed）
  */
 export function decodePublicCommandDto(
   value: unknown
@@ -44,17 +45,11 @@ export function decodePublicCommandDto(
       "beforeStatus",
       "afterStatus",
       "verificationBasis",
-    ]) ||
-    !isPlainObject(value.target)
+    ])
   ) {
     return null
   }
   if (
-    !hasKeys(value.target, ["advertiserId", "campaignId", "desiredStatus"]) ||
-    !isValidResourceId(value.target.advertiserId, "advId") ||
-    !isValidResourceId(value.target.campaignId, "campaignId") ||
-    (value.target.desiredStatus !== "ENABLE" &&
-      value.target.desiredStatus !== "DISABLE") ||
     typeof value.commandId !== "string" ||
     !LOWERCASE_UUID_PATTERN.test(value.commandId) ||
     typeof value.idempotencyKey !== "string" ||
@@ -71,17 +66,16 @@ export function decodePublicCommandDto(
     return null
   }
 
+  const target = decodeCommandTarget(value.capabilityId, value.target)
+  if (!target) return null
+
   return Object.freeze({
     commandId: value.commandId,
     idempotencyKey: value.idempotencyKey,
     capabilityId: value.capabilityId,
     status: value.status,
     isFinal: value.isFinal,
-    target: Object.freeze({
-      advertiserId: value.target.advertiserId,
-      campaignId: value.target.campaignId,
-      desiredStatus: value.target.desiredStatus,
-    }),
+    target,
     beforeStatus: value.beforeStatus,
     afterStatus: value.afterStatus,
     verificationBasis: value.verificationBasis,

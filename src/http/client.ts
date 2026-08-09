@@ -149,7 +149,7 @@ export class DefaultHttpTransport implements HttpTransport {
         input.method !== "POST") ||
       (input.idempotencyKey !== undefined &&
         (input.method !== "POST" ||
-          input.json === undefined ||
+          input.form !== undefined ||
           !IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey)))
     ) {
       throw new HttpTransportError(
@@ -252,6 +252,16 @@ interface PublicJsonPostBase {
   requestId?: string
 }
 
+interface PublicBodylessPostBase {
+  method: "POST"
+  issuerOrigin: string
+  path: string
+  token: string
+  idempotencyKey: string
+  json?: never
+  requestId?: string
+}
+
 export interface PublicStatusJsonPostInput extends PublicJsonPostBase {
   deadlineMs: 120_000
 }
@@ -260,11 +270,54 @@ export interface PublicStandardJsonPostInput extends PublicJsonPostBase {
   deadlineMs: 15_000
 }
 
+export interface PublicStandardBodylessPostInput extends PublicBodylessPostBase {
+  deadlineMs: 15_000
+}
+
+export interface PublicRuleDryRunPostInput {
+  method: "POST"
+  issuerOrigin: string
+  path: string
+  token: string
+  json: JsonObject
+  idempotencyKey?: never
+  requestId?: string
+  deadlineMs: 60_000
+}
+
+export interface PublicCopySubmitPostInput {
+  method: "POST"
+  issuerOrigin: string
+  path: "/public/v1/ads/copy/submit"
+  token: string
+  json: JsonObject
+  idempotencyKey: string
+  requestId?: string
+  deadlineMs: 45_000
+}
+
+export interface PublicCopyPreviewPostInput {
+  method: "POST"
+  issuerOrigin: string
+  path: "/public/v1/ads/copy/preview"
+  token: string
+  json: JsonObject
+  idempotencyKey?: never
+  requestId?: string
+  deadlineMs: 45_000
+}
+
 export type PublicJsonPostInput =
   | PublicStatusJsonPostInput
   | PublicStandardJsonPostInput
 
-export type PublicRequestInput = PublicReadRequestInput | PublicJsonPostInput
+export type PublicRequestInput =
+  | PublicReadRequestInput
+  | PublicJsonPostInput
+  | PublicStandardBodylessPostInput
+  | PublicRuleDryRunPostInput
+  | PublicCopySubmitPostInput
+  | PublicCopyPreviewPostInput
 
 export interface PublicResponse {
   response: HttpResponse
@@ -277,11 +330,25 @@ function assertPublicRequestContract(input: PublicRequestInput): void {
   /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (
     input.method === "POST" &&
-    (input.json === undefined ||
-      input.idempotencyKey === undefined ||
-      !IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey) ||
-      (input.deadlineMs !== DEADLINES_MS.statusWrite &&
-        input.deadlineMs !== DEADLINES_MS.standard))
+    !(
+      (input.deadlineMs === DEADLINES_MS.ruleDryRun &&
+        input.json !== undefined &&
+        input.idempotencyKey === undefined) ||
+      (input.deadlineMs === DEADLINES_MS.campaignRead &&
+        input.json !== undefined &&
+        ((input.path === "/public/v1/ads/copy/submit" &&
+          input.idempotencyKey !== undefined &&
+          IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey)) ||
+          (input.path === "/public/v1/ads/copy/preview" &&
+            input.idempotencyKey === undefined))) ||
+      (input.deadlineMs === DEADLINES_MS.statusWrite &&
+        input.json !== undefined &&
+        input.idempotencyKey !== undefined &&
+        IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey)) ||
+      (input.deadlineMs === DEADLINES_MS.standard &&
+        input.idempotencyKey !== undefined &&
+        IDEMPOTENCY_KEY_PATTERN.test(input.idempotencyKey))
+    )
   ) {
     throw new HttpTransportError(
       "invalid_response",

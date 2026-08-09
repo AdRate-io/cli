@@ -34,7 +34,7 @@ For JSON output, success means the top-level expression `ok === true`. Never use
 
 ## 4. Keep the Session on its fixed team
 
-An AdRate CLI Session is fixed to one team. M0 has no team list, team switch, or profile-selection command. To change teams, the Owner must log out and authorize again:
+Keep every AdRate CLI Session fixed to one team. The CLI has no team list, team switch, or profile-selection command. To change teams, ask the Owner to log out and authorize again:
 
 ```sh
 adrate auth logout --json
@@ -46,13 +46,15 @@ For `RATE_LIMITED`, `UPSTREAM_RATE_LIMITED`, or `DEPENDENCY_UNAVAILABLE`, honor 
 
 For `DAILY_QUOTA_EXCEEDED`, stop immediately. It may use HTTP 429, but it is a daily stop condition, not an invitation to loop.
 
-## 6. Use one idempotency key for one immutable intent
+`RESOURCE_BUSY` means another request already holds the write lock for that resource. It is retryable with a short Retry-After. Keep the original idempotency key and retry; do not mint a new key and do not assume the first request failed. Concurrent submissions that share one key reach this error rather than an immediate receipt hit, because the lock is held across the whole snapshot fetch.
 
-A write key identifies exactly one advertiser, Campaign, desired status, authorization, issuer, and credential. Never reuse it for a different intent.
+## 6. Use one idempotency key for one immutable write
 
-- When Status returns `pending` or `executing` with exit 4, preserve the key and follow the requested wait before querying or using the qualified `commands resume` path.
-- When Status returns `unknown`, an unfamiliar future status, or insufficient success evidence with exit 5, query by the original key first. Do not issue a fresh-key POST.
-- When the Status response is lost and the CLI exits 5, query by the original key first.
+A Command key identifies exactly one advertiser, Campaign, authorization, issuer, credential, and family-specific target: either one desired Status or one Budget or ROAS mode and input value. A receipt key identifies one operation, target, and exact request body, including the file body used by Campaign Copy submit. Never reuse any key for a different intent or across commands.
+
+- When a Campaign Status, Budget, or ROAS Command returns `pending` or `executing` with exit 4, preserve the key and follow the requested wait before querying or using the qualified `commands resume` path.
+- When a Campaign Status, Budget, or ROAS Command returns `unknown`, an unfamiliar future status, or insufficient success evidence with exit 5, query by the original key first. Do not issue a fresh-key POST.
+- When a Campaign Status, Budget, or ROAS response is lost and the CLI exits 5, query by the original key first.
 
 ```sh
 adrate commands get --idempotency-key intent_20260731_001 --json
@@ -62,17 +64,23 @@ adrate commands resume --idempotency-key intent_20260731_001 --json
 
 Never generate a new key to repeat the same write after any of these outcomes.
 
+Receipt-backed Rule writes do not create a local pending journal. Use the operation namespace `rule-create-*`, `rule-update-*`, `rule-enable-*`, `rule-disable-*`, or `rule-delete-*`; Rule dry run has no key. On a confirmed non-retryable rejection that proves no mutation ran, correct each returned `validationErrors` item or resolve the stated business constraint, then retry with a new key. On a network failure, timeout, invalid response, or lost response, replay the exact request with the original key. `duplicate: true` is the original receipt and proves that no second mutation ran. `commands get`, `commands pending`, and `commands resume` do not apply to Rule writes.
+
+Receipt-backed Campaign Copy submit also has no Command pending journal. On a network failure, timeout, invalid response, or lost response, replay the exact original file body with the original key. An explicit `INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED` rejection proves that no Copy task was accepted; correct the cause and submit the corrected body with a new key. `commands get`, `commands pending`, and `commands resume` do not apply to Campaign Copy submit.
+
 ## 7. Interpret exit 5 by operation type
 
 Exit 5 means an irreversible or one-time remote outcome is unknown and must not be retried blindly. It does not always mean query a Command.
 
-- Campaign Status: recover with the original idempotency key through `commands get`, `commands pending`, or the qualified `commands resume` path.
+- Campaign Status, Budget, or ROAS: recover with the original idempotency key through `commands get`, `commands pending`, or the qualified `commands resume` path.
+- Rule create, update, enable, disable, or delete: replay the exact request with the original receipt key. Do not query `commands get` and do not switch keys.
+- Campaign Copy submit: replay the exact original file with the original receipt key. Do not query or resume a Command and do not switch keys.
 - Device Token delivery: the CLI discards the interrupted local Device attempt. Do not manually reuse a `device_code`; the next login starts a fresh Device flow.
 - Logout revoke: verify and revoke through the official AdRate Web device page. Do not assume the remote credential survived or disappeared.
 
-## 8. Distinguish Command query from Status acceptance
+## 8. Distinguish Command query from write acceptance
 
-`commands get` is a GET query, but HTTP 200 does not prove operation success. `pending` or `executing` with `isFinal=false` exits 4; `unknown`, an unfamiliar future status, or insufficient success evidence exits 5. A Status POST may return HTTP 202 only for a non-final Command and follows the same outcome rules. Inspect the Command's status, finality, target, and verification evidence; never infer success from HTTP status alone.
+`commands get` is a GET query, but HTTP 200 does not prove operation success. `pending` or `executing` with `isFinal=false` exits 4; `unknown`, an unfamiliar future status, or insufficient success evidence exits 5. A Campaign Status, Budget, or ROAS POST may return HTTP 202 only for a non-final Command and follows the same outcome rules. Inspect the Command's status, finality, target, and verification evidence; never infer success from HTTP status alone.
 
 ```sh
 adrate commands get --command-id 018f15d1-7d8f-7ea1-a492-8b7f8271fc6e --json
@@ -84,7 +92,7 @@ Only a Command with `isFinal=false` remains worth bounded polling. Honor any Ret
 
 ## 10. Page deliberately
 
-List and report commands return one page. Read `meta.pagination`, then decide from the task whether another page is required. Never automatically fetch every page or build an unbounded local full-dataset scan.
+Ads Campaign list/report commands and Rules list commands return one page. Read `meta.pagination`, then decide from the task whether another page is required. GMV Max Campaign lists are bounded server-side aggregations instead: inspect `truncated` and `warning`, and never treat a partial result as complete. Never automatically fetch every page or build an unbounded local full-dataset scan.
 
 ```sh
 adrate ads campaigns list --adv-id 70001 --page 1 --page-size 100 --json
@@ -106,6 +114,8 @@ Every pending write record is bound to the credential that created it. Logout an
 ## 14. Treat unit charging as diagnostic evidence
 
 `operationUnitsCharged` never decides whether a Command succeeded. Use Command status, finality, target, and verification evidence for the outcome. If the field is `null`, keep it as unknown diagnostic information; never convert it to zero or use it as a reason to issue a fresh-key write.
+
+Rule writes use the `public_write` per-minute window. Supported Ads Rule writes charge 0 daily TikTok operation units. A GMV Max full-store create or target-changing update may charge a conditional unit when a finite plan requires upstream Campaign counting; other supported Rule writes charge 0 daily units. The `rules.write` capability therefore reports `operationUnits=1` as a conservative maximum. The `rules.dryrun` capability reports `operationUnits=2`. For a Rule write, `operationUnitsCharged=0` is neither success evidence nor an exemption from the writes-per-minute limit; use the top-level envelope and receipt evidence for the outcome. When a team is frozen, Rule disable and delete remain available, but create, update, and enable do not.
 
 ## 15. Submit feedback only with explicit confirmation
 
@@ -129,6 +139,6 @@ adrate feedback --category bug --message-stdin --idempotency-key feedback_123 --
 
 Do not change the key to force a duplicate submission. `RATE_LIMITED` must honor Retry-After. `INVALID_REQUEST`, missing scope, and entitlement denial require correction or reauthorization, not a retry loop.
 
-## M0 boundary
+## CLI capability boundary
 
-M0 supports production/test issuers, fixed-team Owner Sessions, explicit single-page reads, and one Campaign ENABLE/DISABLE intent at a time. It does not support arbitrary base URLs, development issuers, team selection, automatic full pagination, multi-account aggregation, batch writes, rules, budget or bid changes, resource creation, deletion, Adgroup/Ad writes, Copy, or GMV Max.
+Use the CLI only with production/test issuers, fixed-team Owner Sessions, deliberate paged Ads and Rules reads, bounded GMV Max reads, Campaign Copy preview, submit, and task reads, Ads and GMV Max Rule create/update/enable/disable/delete and dry run, and one single-Campaign Status, Budget, or GMV Max ROAS intent at a time. Do not use arbitrary base URLs, development issuers, team selection, automatic full pagination, multi-account aggregation, batch writes, standalone Campaign creation or Campaign deletion, bid changes, independent Adgroup/Ad writes, Adgroup Copy, or Campaign Copy task cancellation.

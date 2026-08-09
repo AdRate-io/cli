@@ -7,6 +7,7 @@ import { createLocalSuccess } from "../src/contracts/envelope.js"
 import { renderOutcome } from "../src/output.js"
 import { SkillCatalog } from "../src/skills/skill-catalog.js"
 import { sha256SkillText } from "../src/skills/skill-contract.js"
+import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 import {
   SkillsNotifier,
   withSkillsNotifierInspection,
@@ -120,13 +121,13 @@ describe("SkillsNotifier", () => {
       required: [
         {
           name: "adrate-shared",
-          version: "1.1.0",
-          minCliVersion: "0.1.0-beta.6",
+          version: "1.4.0",
+          minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
         {
           name: "adrate-ads",
-          version: "1.0.0",
-          minCliVersion: "0.1.0",
+          version: "1.4.0",
+          minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
       ],
       issues: [
@@ -194,7 +195,7 @@ describe("SkillsNotifier", () => {
     await writeFile(
       sharedShell,
       (await readFile(sharedShell, "utf8")).replace(
-        'version: "1.1.0"',
+        'version: "1.4.0"',
         "version: true"
       )
     )
@@ -221,12 +222,7 @@ describe("SkillsNotifier", () => {
     const { installed } = await fixture()
     await installAll(installed)
     await changeVersion(installed, "adrate-shared", "2.0.0", "a".repeat(64))
-    const openAiPath = join(
-      installed,
-      "adrate-shared",
-      "agents",
-      "openai.yaml"
-    )
+    const openAiPath = join(installed, "adrate-shared", "agents", "openai.yaml")
     await writeFile(
       openAiPath,
       (await readFile(openAiPath, "utf8"))

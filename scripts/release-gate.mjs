@@ -39,6 +39,7 @@ export const EXPECTED_TARBALL_FILES = Object.freeze(
   [
     "LICENSE",
     "README.md",
+    "README.zh-CN.md",
     "dist/bin.d.ts",
     "dist/bin.js",
     "dist/bin.js.map",
@@ -182,6 +183,7 @@ function assertPackageMetadata(packageJson) {
         "skills",
         "skills-content",
         "README.md",
+        "README.zh-CN.md",
         "scripts/keychain-smoke.mjs",
       ])
   ) {

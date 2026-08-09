@@ -30,6 +30,14 @@ function createHarness() {
     campaignStatus: {
       status: vi.fn(() => Promise.resolve(successOutcome("status-write"))),
     },
+    campaignBudget: {
+      budget: vi.fn(() => Promise.resolve(successOutcome("budget-write"))),
+    },
+    gmvMax: {
+      status: vi.fn(() => Promise.resolve(successOutcome("gmv-status"))),
+      budget: vi.fn(() => Promise.resolve(successOutcome("gmv-budget"))),
+      roas: vi.fn(() => Promise.resolve(successOutcome("gmv-roas"))),
+    },
     commandQuery: {
       get: vi.fn(() => Promise.resolve(successOutcome("command-get"))),
     },
@@ -41,6 +49,18 @@ function createHarness() {
     },
     feedback: {
       submit: vi.fn(() => Promise.resolve(successOutcome("feedback"))),
+    },
+    copy: {
+      submit: vi.fn(() => Promise.resolve(successOutcome("copy-submit"))),
+      preview: vi.fn(() => Promise.resolve(successOutcome("copy-preview"))),
+    },
+    rules: {
+      create: vi.fn(() => Promise.resolve(successOutcome("rule-create"))),
+      update: vi.fn(() => Promise.resolve(successOutcome("rule-update"))),
+      enable: vi.fn(() => Promise.resolve(successOutcome("rule-enable"))),
+      disable: vi.fn(() => Promise.resolve(successOutcome("rule-disable"))),
+      delete: vi.fn(() => Promise.resolve(successOutcome("rule-delete"))),
+      dryRun: vi.fn(() => Promise.resolve(successOutcome("rule-dryrun"))),
     },
     skills: {
       list: vi.fn(() => Promise.resolve(successOutcome("skills-list"))),
@@ -173,7 +193,11 @@ describe("CliApplication local surface", () => {
     if (execution.outcome.envelope.ok) {
       expect(execution.outcome.envelope.data.version).toBe(CLI_VERSION)
     }
-    expect(execution.outcome.humanLines).toEqual([CLI_VERSION])
+    expect(execution.outcome.humanOutput).toEqual({
+      stream: "stdout",
+      mode: "line",
+      value: CLI_VERSION,
+    })
     expect(harness.reads.execute).not.toHaveBeenCalled()
   })
 
@@ -248,6 +272,92 @@ describe("CliApplication local surface", () => {
     )
   })
 
+  it("Copy submit/preview 只分派 file、request id 与 submit key", async () => {
+    const harness = createHarness()
+    await harness.application.execute([
+      "ads",
+      "copy",
+      "submit",
+      "--file",
+      "copy.json",
+      "--idempotency-key",
+      "copy_key",
+      "--request-id",
+      "copy-submit-request",
+    ])
+    await harness.application.execute([
+      "ads",
+      "copy",
+      "preview",
+      "--file",
+      "copy.json",
+      "--request-id",
+      "copy-preview-request",
+    ])
+
+    expect(harness.commands.copy.submit).toHaveBeenCalledWith({
+      file: "copy.json",
+      idempotencyKey: "copy_key",
+      requestId: "copy-submit-request",
+    })
+    expect(harness.commands.copy.preview).toHaveBeenCalledWith({
+      file: "copy.json",
+      requestId: "copy-preview-request",
+    })
+    expect(harness.commands.pendingCommands.pending).not.toHaveBeenCalled()
+    expect(harness.commands.commandResume.resume).not.toHaveBeenCalled()
+    expect(harness.commands.commandQuery.get).not.toHaveBeenCalled()
+    expect(harness.commands.campaignStatus.status).not.toHaveBeenCalled()
+    expect(harness.commands.campaignBudget.budget).not.toHaveBeenCalled()
+    expect(harness.reads.execute).not.toHaveBeenCalled()
+  })
+
+  it("Copy tasks 与 tasks get 只进入统一 ReadService，不触发 Copy 写或 Command", async () => {
+    const harness = createHarness()
+    await harness.application.execute([
+      "ads",
+      "copy",
+      "tasks",
+      "--status",
+      "partial",
+      "--page",
+      "2",
+      "--page-size",
+      "50",
+    ])
+    await harness.application.execute([
+      "ads",
+      "copy",
+      "tasks",
+      "get",
+      "--task-id",
+      "42",
+    ])
+
+    expect(harness.reads.execute).toHaveBeenNthCalledWith(
+      1,
+      {
+        kind: "ads.copy.tasks.list",
+        status: "partial",
+        page: "2",
+        pageSize: "50",
+      },
+      expect.objectContaining({ test: false })
+    )
+    expect(harness.reads.execute).toHaveBeenNthCalledWith(
+      2,
+      { kind: "ads.copy.tasks.get", taskId: "42" },
+      expect.objectContaining({ test: false })
+    )
+    expect(harness.commands.copy.submit).not.toHaveBeenCalled()
+    expect(harness.commands.copy.preview).not.toHaveBeenCalled()
+    expect(harness.commands.pendingCommands.pending).not.toHaveBeenCalled()
+    expect(harness.commands.commandResume.resume).not.toHaveBeenCalled()
+    expect(harness.commands.commandQuery.get).not.toHaveBeenCalled()
+    expect(harness.commands.campaignStatus.status).not.toHaveBeenCalled()
+    expect(harness.commands.campaignBudget.budget).not.toHaveBeenCalled()
+  })
+
   it("反馈命令只向独立服务分派显式输入和公共 Key", async () => {
     const harness = createHarness()
     await harness.application.execute([
@@ -272,6 +382,79 @@ describe("CliApplication local surface", () => {
     expect(harness.commands.pendingCommands.pending).not.toHaveBeenCalled()
     expect(harness.reads.execute).not.toHaveBeenCalled()
     expect(harness.auth.login).not.toHaveBeenCalled()
+  })
+
+  it("Rule 写命令与 dryrun 精确分派参数", async () => {
+    const harness = createHarness()
+    await harness.application.execute([
+      "rules",
+      "create",
+      "--stdin",
+      "--idempotency-key",
+      "create_key",
+      "--request-id",
+      "create_request",
+    ])
+    expect(harness.commands.rules.create).toHaveBeenCalledWith({
+      file: undefined,
+      stdin: true,
+      idempotencyKey: "create_key",
+      requestId: "create_request",
+    })
+
+    await harness.application.execute([
+      "rules",
+      "update",
+      "--rule-id",
+      "42",
+      "--file",
+      "patch.json",
+    ])
+    expect(harness.commands.rules.update).toHaveBeenCalledWith({
+      ruleId: "42",
+      file: "patch.json",
+      idempotencyKey: undefined,
+      requestId: undefined,
+    })
+
+    for (const operation of ["enable", "disable", "delete"] as const) {
+      await harness.application.execute([
+        "rules",
+        operation,
+        "--rule-id",
+        "42",
+        "--idempotency-key",
+        `${operation}_key`,
+      ])
+      expect(harness.commands.rules[operation]).toHaveBeenCalledWith({
+        ruleId: "42",
+        idempotencyKey: `${operation}_key`,
+        requestId: undefined,
+      })
+    }
+
+    await harness.application.execute([
+      "rules",
+      "dryrun",
+      "--rule-id",
+      "42",
+      "--adv-id",
+      "70001",
+      "--shop-id",
+      "shop-1",
+      "--campaign-id",
+      "80001",
+      "--request-id",
+      "dryrun_request",
+    ])
+    expect(harness.commands.rules.dryRun).toHaveBeenCalledWith({
+      ruleId: "42",
+      advId: "70001",
+      shopId: "shop-1",
+      campaignId: "80001",
+      requestId: "dryrun_request",
+    })
+    expect(harness.reads.execute).not.toHaveBeenCalled()
   })
 
   it("T10 命令显式穷尽分发，全局 Key/requestId 与命令参数无漂移", async () => {
@@ -345,7 +528,214 @@ describe("CliApplication local surface", () => {
       requestId: "resume_request",
     })
 
-    expect(harness.reads.execute).not.toHaveBeenCalled()
+    await harness.application.execute([
+      "ads",
+      "campaigns",
+      "budget",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+      "--mode",
+      "set",
+      "--value",
+      "300",
+      "--auth-id",
+      "42",
+      "--idempotency-key",
+      "budget_key",
+      "--request-id",
+      "budget_request",
+    ])
+    expect(harness.commands.campaignBudget.budget).toHaveBeenCalledWith({
+      advId: "70001",
+      campaignId: "80001",
+      mode: "set",
+      value: "300",
+      authId: "42",
+      idempotencyKey: "budget_key",
+      requestId: "budget_request",
+    })
+
+    await harness.application.execute([
+      "gmvmax",
+      "campaigns",
+      "status",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+      "--set",
+      "disable",
+      "--auth-id",
+      "9",
+      "--idempotency-key",
+      "gmv_status_key",
+    ])
+    expect(harness.commands.gmvMax.status).toHaveBeenCalledWith({
+      advId: "70001",
+      campaignId: "80001",
+      desiredStatus: "disable",
+      authId: "9",
+      idempotencyKey: "gmv_status_key",
+      requestId: undefined,
+    })
+
+    await harness.application.execute([
+      "gmvmax",
+      "campaigns",
+      "budget",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+      "--mode",
+      "increase_amount",
+      "--value",
+      "25.5",
+      "--auth-id",
+      "9",
+    ])
+    expect(harness.commands.gmvMax.budget).toHaveBeenCalledWith({
+      advId: "70001",
+      campaignId: "80001",
+      mode: "increase_amount",
+      value: "25.5",
+      authId: "9",
+      idempotencyKey: undefined,
+      requestId: undefined,
+    })
+
+    await harness.application.execute([
+      "gmvmax",
+      "campaigns",
+      "roas",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+      "--mode",
+      "set",
+      "--value",
+      "2.5",
+      "--auth-id",
+      "9",
+      "--request-id",
+      "gmv_roas_request",
+    ])
+    expect(harness.commands.gmvMax.roas).toHaveBeenCalledWith({
+      advId: "70001",
+      campaignId: "80001",
+      mode: "set",
+      value: "2.5",
+      authId: "9",
+      idempotencyKey: undefined,
+      requestId: "gmv_roas_request",
+    })
+
+    await harness.application.execute([
+      "gmvmax",
+      "campaigns",
+      "get",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+      "--store-id",
+      "shop-1",
+    ])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      {
+        kind: "gmvmax.campaigns.get",
+        advId: "70001",
+        campaignId: "80001",
+        storeId: "shop-1",
+        authId: undefined,
+      },
+      expect.objectContaining({ json: false })
+    )
+
+    harness.reads.execute.mockClear()
+
+    await harness.application.execute([
+      "rules",
+      "options",
+      "--rule-type",
+      "ads",
+      "--scope",
+      "campaign",
+    ])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      { kind: "rules.options", ruleType: "ads", scope: "campaign" },
+      expect.objectContaining({ json: false })
+    )
+
+    await harness.application.execute([
+      "rules",
+      "list",
+      "--rule-type",
+      "ads",
+      "--keyword",
+      "cpa",
+      "--page",
+      "2",
+      "--page-size",
+      "50",
+    ])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      {
+        kind: "rules.list",
+        ruleType: "ads",
+        keyword: "cpa",
+        page: "2",
+        pageSize: "50",
+      },
+      expect.objectContaining({ json: false })
+    )
+
+    await harness.application.execute(["rules", "get", "--rule-id", "42"])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      { kind: "rules.get", ruleId: "42" },
+      expect.objectContaining({ json: false })
+    )
+
+    await harness.application.execute([
+      "rules",
+      "executions",
+      "list",
+      "--rule-id",
+      "42",
+      "--result",
+      "success",
+      "--page-size",
+      "50",
+    ])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      {
+        kind: "rules.executions.list",
+        ruleId: "42",
+        scopeId: undefined,
+        result: "success",
+        from: undefined,
+        to: undefined,
+        page: undefined,
+        pageSize: "50",
+      },
+      expect.objectContaining({ json: false })
+    )
+
+    await harness.application.execute([
+      "rules",
+      "executions",
+      "get",
+      "--execution-id",
+      "99",
+    ])
+    expect(harness.reads.execute).toHaveBeenLastCalledWith(
+      { kind: "rules.executions.get", executionId: "99" },
+      expect.objectContaining({ json: false })
+    )
+
     expect(harness.auth.login).not.toHaveBeenCalled()
     expect(harness.auth.status).not.toHaveBeenCalled()
     expect(harness.auth.whoami).not.toHaveBeenCalled()

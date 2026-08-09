@@ -25,12 +25,30 @@ function harness(notifier?: { inspect: () => Promise<never> }) {
   const reads = { execute: vi.fn(() => Promise.resolve(success("read"))) }
   const commands = {
     campaignStatus: { status: vi.fn(() => Promise.resolve(success("status"))) },
+    campaignBudget: { budget: vi.fn(() => Promise.resolve(success("budget"))) },
+    gmvMax: {
+      status: vi.fn(() => Promise.resolve(success("gmv-status"))),
+      budget: vi.fn(() => Promise.resolve(success("gmv-budget"))),
+      roas: vi.fn(() => Promise.resolve(success("gmv-roas"))),
+    },
     commandQuery: { get: vi.fn(() => Promise.resolve(success("get"))) },
     pendingCommands: {
       pending: vi.fn(() => Promise.resolve(success("pending"))),
     },
     commandResume: { resume: vi.fn(() => Promise.resolve(success("resume"))) },
     feedback: { submit: vi.fn(() => Promise.resolve(success("feedback"))) },
+    copy: {
+      submit: vi.fn(() => Promise.resolve(success("copy-submit"))),
+      preview: vi.fn(() => Promise.resolve(success("copy-preview"))),
+    },
+    rules: {
+      create: vi.fn(() => Promise.resolve(success("rule-create"))),
+      update: vi.fn(() => Promise.resolve(success("rule-update"))),
+      enable: vi.fn(() => Promise.resolve(success("rule-enable"))),
+      disable: vi.fn(() => Promise.resolve(success("rule-disable"))),
+      delete: vi.fn(() => Promise.resolve(success("rule-delete"))),
+      dryRun: vi.fn(() => Promise.resolve(success("rule-dryrun"))),
+    },
     skills: {
       list: vi.fn(() => Promise.resolve(success("skills-list"))),
       read: vi.fn(() => Promise.resolve(success("skills-read"))),

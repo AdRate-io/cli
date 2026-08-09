@@ -1,12 +1,19 @@
 import { usageFailure } from "../errors.js"
 
-export type ResourceKind = "advId" | "campaignId"
+export type ResourceKind = "advId" | "campaignId" | "storeId"
 
 export const RESOURCE_ID_LIMITS: Readonly<Record<ResourceKind, number>> =
   Object.freeze({
     advId: 50,
     campaignId: 128,
+    storeId: 128,
   })
+
+const RESOURCE_FLAGS: Readonly<Record<ResourceKind, string>> = Object.freeze({
+  advId: "--adv-id",
+  campaignId: "--campaign-id",
+  storeId: "--store-id",
+})
 
 export const RAW_PATH_SEGMENT_PATTERN = "^(?!\\.{1,2}$)[A-Za-z0-9_!~*'().-]+$"
 const RAW_PATH_SEGMENT_REGEX = new RegExp(RAW_PATH_SEGMENT_PATTERN)
@@ -47,16 +54,15 @@ export function isTransportableResourceId(
 
 export function requireTransportableResourceId(
   value: unknown,
-  kind: ResourceKind
+  kind: ResourceKind,
+  flag = RESOURCE_FLAGS[kind]
 ): string {
   if (!isValidResourceId(value, kind)) {
-    throw usageFailure(
-      `--${kind === "advId" ? "adv-id" : "campaign-id"} is invalid.`
-    )
+    throw usageFailure(`${flag} is invalid.`)
   }
   if (!isTransportableResourceId(value, kind)) {
     throw usageFailure(
-      `--${kind === "advId" ? "adv-id" : "campaign-id"} cannot be transported by the M0 raw-path contract.`
+      `${flag} cannot be transported by the CLI raw-path contract.`
     )
   }
   return value

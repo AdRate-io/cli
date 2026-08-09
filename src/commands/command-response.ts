@@ -4,12 +4,13 @@ import {
   decodePublicCommandDto,
 } from "../contracts/command.js"
 import { exitCodeForEnvelope } from "../output.js"
+import { getCliCommandFamily } from "./command-families.js"
 import type { PublicCommandDto } from "../contracts/command.js"
 import type {
   PublicEnvelope,
   PublicErrorEnvelope,
 } from "../contracts/envelope.js"
-import type { PendingCommandIntent } from "./pending-command-contract.js"
+import type { PendingCommandIntent } from "./command-families.js"
 import type { CliExitCode } from "../constants.js"
 
 export interface ExpectedCommandIdentity {
@@ -90,12 +91,17 @@ function commandMatchesExpected(
     return false
   }
   const intent = expected.intent
-  return (
-    intent === undefined ||
-    (command.target.advertiserId === intent.advId &&
-      command.target.campaignId === intent.campaignId &&
-      command.target.desiredStatus === intent.desiredStatus)
-  )
+  if (intent === undefined) return true
+  const target = command.target
+  if (
+    target.advertiserId !== intent.advId ||
+    target.campaignId !== intent.campaignId
+  ) {
+    return false
+  }
+  const family = getCliCommandFamily(intent.capabilityId)
+  if (!family) return false
+  return family.matchesIntentTarget(intent.familyPayload, target)
 }
 
 function decodeExpectedCommand(
@@ -184,13 +190,9 @@ export function hasPositiveCommandSuccess(
   command: PublicCommandDto
 ): boolean {
   if (command.status !== "succeeded" || !command.isFinal) return false
-  const desiredStatus = command.target.desiredStatus
-  return (
-    (command.verificationBasis === "verified_no_op" &&
-      command.beforeStatus === desiredStatus) ||
-    (command.verificationBasis === "observed_target_state" &&
-      command.afterStatus === desiredStatus)
-  )
+  const family = getCliCommandFamily(command.capabilityId)
+  if (!family) return false
+  return family.isNoOp(command) || family.isTargetReached(command)
 }
 
 export function exitCodeForCommand(command: PublicCommandDto): CliExitCode {

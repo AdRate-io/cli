@@ -119,6 +119,7 @@ describe("CLI package contract", () => {
       "skills",
       "skills-content",
       "README.md",
+      "README.zh-CN.md",
       "scripts/keychain-smoke.mjs",
     ])
   })
@@ -143,7 +144,7 @@ describe("CLI package contract", () => {
       })
     }
 
-    const { stderr } = await execFileAsync(
+    const { stdout } = await execFileAsync(
       process.execPath,
       [
         join(consumerRoot, "node_modules", "@adrate", "cli", "dist", "bin.js"),
@@ -154,7 +155,7 @@ describe("CLI package contract", () => {
         env: { ...process.env, ADRATE_NO_SKILLS_NOTIFIER: "1" },
       }
     )
-    expect(stderr.trim()).toBe(CLI_VERSION)
+    expect(stdout.trim()).toBe(CLI_VERSION)
   })
 
   it("安装后的二进制可从任意 consumer cwd 解析包内 Skill 正文", async () => {
@@ -226,12 +227,13 @@ describe("CLI package contract", () => {
     )
   })
 
-  it("冻结真实 tarball 的 15 项发布边界", async () => {
+  it("冻结真实 tarball 的 16 项发布边界", async () => {
     const { stdout } = await execFileAsync("tar", ["-tzf", tarball])
     expect(stdout.trim().split("\n").sort()).toEqual(
       [
         "package/LICENSE",
         "package/README.md",
+        "package/README.zh-CN.md",
         "package/dist/bin.d.ts",
         "package/dist/bin.js",
         "package/dist/bin.js.map",

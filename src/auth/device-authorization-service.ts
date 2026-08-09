@@ -4,8 +4,8 @@ import {
   DEADLINES_MS,
   DEVICE_GRANT_TYPE,
   EXIT_CODE,
-  M0_CAPABILITIES,
-  M0_SCOPE,
+  CLI_CAPABILITIES,
+  CLI_SCOPE,
 } from "../constants.js"
 import { createLocalSuccess } from "../contracts/envelope.js"
 import {
@@ -282,7 +282,7 @@ export class DeviceAuthorizationService {
       await this.context.local.preflightCredentialStorage()
       const form = new URLSearchParams({
         client_id: CLIENT_ID,
-        scope: M0_SCOPE,
+        scope: CLI_SCOPE,
         client_instance_id: reservation.clientInstanceId,
       })
       if (deviceName !== null) form.set("device_name", deviceName)
@@ -332,7 +332,7 @@ export class DeviceAuthorizationService {
         clientId: CLIENT_ID,
         clientInstanceId: reservation.clientInstanceId,
         deviceName,
-        requestedScopes: [...M0_CAPABILITIES],
+        requestedScopes: [...CLI_CAPABILITIES],
         environment: reservation.environment,
         issuerOrigin: reservation.issuerOrigin,
         deviceCode: decoded.deviceCode,

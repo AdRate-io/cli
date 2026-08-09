@@ -4,6 +4,7 @@ import {
   outcomeUnknownFailure,
 } from "../errors.js"
 import { outcomeFromEnvelope, warningsForEnvelope } from "../output.js"
+import { getCliCommandFamily } from "./command-families.js"
 import { decideStatusPendingCommand } from "./command-response.js"
 import { settlePendingCommand } from "./pending-command-settlement.js"
 import type {
@@ -70,11 +71,14 @@ function responseFact(response: PublicResponse): PendingCommandLastResponse {
 }
 
 const TERMINAL_MISSING_WARNING =
-  "Local recovery evidence was already finalized. Query the original idempotency key with commands get; do not issue a new Status request."
+  "Local recovery evidence was already finalized. Query the original idempotency key with commands get; do not issue a new Command request."
 
 /**
- * 对一条已安全落盘的 pending record 执行精确一次 Status POST，
+ * 对一条已安全落盘的 pending record 执行精确一次 Command POST，
  * 并作为 POST 响应与本地 journal 收敛矩阵的唯一实现。
+ *
+ * path 和 body 构造从家族注册表分派——Dispatcher 本身不含
+ * 任何 capability 特定逻辑。
  */
 export class StatusCommandDispatcher {
   private readonly now: () => Date
@@ -99,6 +103,15 @@ export class StatusCommandDispatcher {
     const record = input.record
     assertCredentialMatchesRecord(record, input.expectedCredential)
 
+    const family = getCliCommandFamily(record.capabilityId)
+    if (!family) {
+      throw dependencyFailure(
+        `Unknown Command family: ${record.capabilityId}; no request was sent.`,
+        EXIT_CODE.business,
+        { reason: "unknown_command_family" }
+      )
+    }
+
     let response: PublicResponse
     const token = await this.local.fenceExpectedLocatedCredential(
       input.expectedCredential
@@ -107,15 +120,10 @@ export class StatusCommandDispatcher {
     try {
       const pendingResponse = this.http.postPublicJson({
         issuerOrigin: record.issuerOrigin,
-        path: `/public/v1/ads/advertisers/${record.intent.advId}/campaigns/${record.intent.campaignId}/status`,
+        path: family.postPath(record.intent),
         token,
         idempotencyKey: record.idempotencyKey,
-        json: {
-          desiredStatus: record.intent.desiredStatus,
-          ...(record.intent.authId === null
-            ? {}
-            : { authId: record.intent.authId }),
-        },
+        json: family.postBody(record.intent),
         ...(input.requestId === undefined
           ? {}
           : { requestId: input.requestId }),
@@ -124,7 +132,7 @@ export class StatusCommandDispatcher {
     } catch {
       await this.markResponseUnknownBestEffort(record, null)
       throw outcomeUnknownFailure(
-        "The Status write result is unknown. Keep the original idempotency key and recover with commands resume.",
+        "The Command write result is unknown. Keep the original idempotency key and recover with commands resume.",
         { suggestedAction: "query_command" }
       )
     }
@@ -166,7 +174,7 @@ export class StatusCommandDispatcher {
     } catch {
       await this.markResponseUnknownBestEffort(record, responseFact(response))
       throw outcomeUnknownFailure(
-        "The Status response was received, but local recovery evidence could not be committed.",
+        "The Command response was received, but local recovery evidence could not be committed.",
         { suggestedAction: "query_command" }
       )
     }
@@ -175,12 +183,12 @@ export class StatusCommandDispatcher {
       const failure =
         decision.exitCode === EXIT_CODE.retryable
           ? dependencyFailure(
-              "The server returned contradictory Status recovery evidence. Keep the original idempotency key.",
+              "The server returned contradictory Command recovery evidence. Keep the original idempotency key.",
               EXIT_CODE.retryable,
               { reason: "invalid_command_response" }
             )
           : outcomeUnknownFailure(
-              "The server returned invalid Status Command evidence. Keep the original idempotency key.",
+              "The server returned invalid Command evidence. Keep the original idempotency key.",
               { reason: "invalid_command_response" }
             )
       return {

@@ -8,7 +8,7 @@ import {
   pendingRecordId,
 } from "../src/commands/pending-command-contract.js"
 import { CliFailure } from "../src/errors.js"
-import { CREDENTIAL_ID } from "./helpers.js"
+import { CREDENTIAL_ID, statusIntent } from "./helpers.js"
 import type { LocalErrorEnvelope } from "../src/contracts/envelope.js"
 import type { PendingCommandRecord } from "../src/commands/pending-command-contract.js"
 import type {
@@ -30,12 +30,10 @@ function entry(input: {
     credentialId: CREDENTIAL_ID,
     issuerOrigin: "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent({
       campaignId: input.campaignId ?? "80001",
-      desiredStatus: "ENABLE",
-      authId: null,
-    },
+    }),
     now: CREATED_AT,
   })
   const commandId = input.commandId ?? null

@@ -17,6 +17,15 @@ import type { GlobalOptions, ReadCommand } from "../parser.js"
 import type { CliOutcome } from "../errors.js"
 import type { LocalCredentialCoordinator } from "../auth/local-credentials.js"
 
+const COPY_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "partial",
+  "cancelled",
+])
+
 function required(value: string | undefined, flag: string): string {
   if (value === undefined) throw usageFailure(`${flag} is required.`)
   return value
@@ -78,6 +87,23 @@ function assertReportRange(
   if (difference < 0 || difference > maximum) {
     throw usageFailure(`The date range is invalid for --group-by ${groupBy}.`)
   }
+}
+
+function assertGmvMaxDateRange(
+  fromValue: string | undefined,
+  toValue: string | undefined
+): Readonly<{ from: string; to: string }> | null {
+  if (fromValue === undefined && toValue === undefined) return null
+  if (fromValue === undefined || toValue === undefined) {
+    throw usageFailure("--from and --to must be supplied together.")
+  }
+  const from = parseDateOnly(fromValue, "--from")
+  const to = parseDateOnly(toValue, "--to")
+  const inclusiveDays = to.ordinal - from.ordinal + 1
+  if (inclusiveDays < 1 || inclusiveDays > 30) {
+    throw usageFailure("--from and --to must span 1 to 30 inclusive days.")
+  }
+  return { from: from.value, to: to.value }
 }
 
 export class ReadCommandService {
@@ -224,6 +250,184 @@ export class ReadCommandService {
             query
           ),
           deadlineMs: DEADLINES_MS.campaignRead,
+        }
+      }
+      case "ads.copy.tasks.list": {
+        const query = new URLSearchParams()
+        if (command.status !== undefined) {
+          if (!COPY_TASK_STATUSES.has(command.status)) {
+            throw usageFailure(
+              "--status must be pending, processing, completed, failed, partial, or cancelled."
+            )
+          }
+          query.set("status", command.status)
+        }
+        appendOptionalInteger(query, "page", command.page, "--page")
+        appendOptionalInteger(
+          query,
+          "pageSize",
+          command.pageSize,
+          "--page-size",
+          100
+        )
+        return {
+          path: withQuery("/public/v1/ads/copy/tasks", query),
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "ads.copy.tasks.get": {
+        const taskId = parsePositiveInteger(
+          required(command.taskId, "--task-id"),
+          "--task-id"
+        )
+        return {
+          path: `/public/v1/ads/copy/tasks/${taskId}`,
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "gmvmax.stores": {
+        const advId = requireTransportableResourceId(
+          required(command.advId, "--adv-id"),
+          "advId"
+        )
+        const query = new URLSearchParams({ advId })
+        appendOptionalInteger(query, "authId", command.authId, "--auth-id")
+        return {
+          path: withQuery("/public/v1/gmvmax/stores", query),
+          deadlineMs: DEADLINES_MS.gmvMaxRead,
+        }
+      }
+      case "gmvmax.campaigns.list": {
+        const advId = requireTransportableResourceId(
+          required(command.advId, "--adv-id"),
+          "advId"
+        )
+        const storeId = requireTransportableResourceId(
+          required(command.storeId, "--store-id"),
+          "storeId"
+        )
+        const promotionType = required(
+          command.promotionType,
+          "--promotion-type"
+        )
+        if (promotionType !== "product" && promotionType !== "live") {
+          throw usageFailure("--promotion-type must be product or live.")
+        }
+        const range = assertGmvMaxDateRange(command.from, command.to)
+        const query = new URLSearchParams({ storeId, promotionType })
+        if (range) {
+          query.set("from", range.from)
+          query.set("to", range.to)
+        }
+        if (command.includeTrend) query.set("includeTrend", "true")
+        appendOptionalInteger(query, "authId", command.authId, "--auth-id")
+        return {
+          path: withQuery(
+            `/public/v1/gmvmax/advertisers/${advId}/campaigns`,
+            query
+          ),
+          deadlineMs: DEADLINES_MS.gmvMaxRead,
+        }
+      }
+      case "gmvmax.campaigns.get": {
+        const advId = requireTransportableResourceId(
+          required(command.advId, "--adv-id"),
+          "advId"
+        )
+        const campaignId = requireTransportableResourceId(
+          required(command.campaignId, "--campaign-id"),
+          "campaignId"
+        )
+        const storeId = requireTransportableResourceId(
+          required(command.storeId, "--store-id"),
+          "storeId"
+        )
+        const query = new URLSearchParams({ storeId })
+        appendOptionalInteger(query, "authId", command.authId, "--auth-id")
+        return {
+          path: withQuery(
+            `/public/v1/gmvmax/advertisers/${advId}/campaigns/${campaignId}`,
+            query
+          ),
+          deadlineMs: DEADLINES_MS.gmvMaxRead,
+        }
+      }
+
+      case "rules.options": {
+        const ruleType = required(command.ruleType, "--rule-type")
+        const scope = required(command.scope, "--scope")
+        return {
+          path: withQuery(
+            "/public/v1/rules/options",
+            new URLSearchParams({ ruleType, scope })
+          ),
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "rules.list": {
+        const query = new URLSearchParams()
+        if (command.ruleType !== undefined) {
+          query.set("ruleType", command.ruleType)
+        }
+        if (command.keyword !== undefined) {
+          query.set("keyword", command.keyword)
+        }
+        appendOptionalInteger(query, "page", command.page, "--page")
+        appendOptionalInteger(
+          query,
+          "pageSize",
+          command.pageSize,
+          "--page-size",
+          100
+        )
+        return {
+          path: withQuery("/public/v1/rules", query),
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "rules.get": {
+        const ruleId = parsePositiveInteger(
+          required(command.ruleId, "--rule-id"),
+          "--rule-id"
+        )
+        return {
+          path: `/public/v1/rules/${ruleId}`,
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "rules.executions.list": {
+        const query = new URLSearchParams()
+        if (command.ruleId !== undefined) {
+          query.set(
+            "ruleId",
+            String(parsePositiveInteger(command.ruleId, "--rule-id"))
+          )
+        }
+        if (command.scopeId !== undefined) query.set("scopeId", command.scopeId)
+        if (command.result !== undefined) query.set("result", command.result)
+        if (command.from !== undefined) query.set("from", command.from)
+        if (command.to !== undefined) query.set("to", command.to)
+        appendOptionalInteger(query, "page", command.page, "--page")
+        appendOptionalInteger(
+          query,
+          "pageSize",
+          command.pageSize,
+          "--page-size",
+          100
+        )
+        return {
+          path: withQuery("/public/v1/rules/executions", query),
+          deadlineMs: DEADLINES_MS.standard,
+        }
+      }
+      case "rules.executions.get": {
+        const executionId = parsePositiveInteger(
+          required(command.executionId, "--execution-id"),
+          "--execution-id"
+        )
+        return {
+          path: `/public/v1/rules/executions/${executionId}`,
+          deadlineMs: DEADLINES_MS.standard,
         }
       }
     }

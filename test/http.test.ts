@@ -356,6 +356,157 @@ describe("DefaultHttpTransport", () => {
     ])
   })
 
+  it("Rule mutation POST 带 Key 但完全无 body 和 Content-Type", async () => {
+    const responseRequestId = "rule-disable-response"
+    undiciMock.fetch.mockResolvedValueOnce(
+      new Response(successEnvelope(responseRequestId), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-Id": responseRequestId,
+        },
+      })
+    )
+
+    await new PublicHttpClient().requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/rules/42/disable",
+      token: "opaque-session-token",
+      idempotencyKey: "rule-disable-key",
+      requestId: "rule-disable-request",
+      deadlineMs: 15_000,
+    })
+
+    const [, init] = undiciMock.fetch.mock.calls[0] as [
+      URL,
+      { headers: Headers; body?: string },
+    ]
+    expect(init.headers.get("Idempotency-Key")).toBe("rule-disable-key")
+    expect(init.headers.has("Content-Type")).toBe(false)
+    expect(init.body).toBeUndefined()
+  })
+
+  it("Rule dryrun 只允许无 Key 的 60 秒 JSON POST", async () => {
+    const requestId = "rule-dryrun-response"
+    const transport = new StaticTransport({
+      status: 200,
+      headers: {},
+      requestId,
+      text: successEnvelope(requestId),
+    })
+    await new PublicHttpClient(transport).requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/rules/42/dryrun",
+      token: "opaque-session-token",
+      json: { advId: "70001" },
+      deadlineMs: 60_000,
+    })
+    expect(transport.requests[0]).not.toHaveProperty("idempotencyKey")
+
+    for (const invalid of [
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/rules/42/dryrun",
+        token: "opaque-session-token",
+        json: { advId: "70001" },
+        idempotencyKey: "must_not_exist",
+        deadlineMs: 60_000,
+      },
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/rules/42/dryrun",
+        token: "opaque-session-token",
+        deadlineMs: 60_000,
+      },
+    ] as const) {
+      await expect(
+        new PublicHttpClient(transport).requestPublic(
+          invalid as unknown as PublicRequestInput
+        )
+      ).rejects.toMatchObject({ kind: "invalid_response" })
+    }
+  })
+
+  it("Copy 45 秒 POST 只允许 submit keyed 与 preview unkeyed 两种精确 path", async () => {
+    const requestId = "copy-http-profile"
+    const transport = new StaticTransport({
+      status: 200,
+      headers: {},
+      requestId,
+      text: successEnvelope(requestId),
+    })
+    const client = new PublicHttpClient(transport)
+    await client.requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/ads/copy/submit",
+      token: "opaque-session-token",
+      idempotencyKey: "copy-submit-key",
+      json: { sourceAdvId: "70001" },
+      deadlineMs: 45_000,
+    })
+    await client.requestPublic({
+      method: "POST",
+      issuerOrigin: "https://api.adrate.io",
+      path: "/public/v1/ads/copy/preview",
+      token: "opaque-session-token",
+      json: { sourceAdvId: "70001" },
+      deadlineMs: 45_000,
+    })
+    expect(transport.requests).toHaveLength(2)
+    expect(transport.requests[0]).toHaveProperty(
+      "idempotencyKey",
+      "copy-submit-key"
+    )
+    expect(transport.requests[1]).not.toHaveProperty("idempotencyKey")
+
+    for (const invalid of [
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/ads/copy/submit",
+        token: "opaque-session-token",
+        json: { sourceAdvId: "70001" },
+        deadlineMs: 45_000,
+      },
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/ads/copy/submit",
+        token: "opaque-session-token",
+        idempotencyKey: "copy-submit-key",
+        deadlineMs: 45_000,
+      },
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/ads/copy/preview",
+        token: "opaque-session-token",
+        idempotencyKey: "must-not-exist",
+        json: { sourceAdvId: "70001" },
+        deadlineMs: 45_000,
+      },
+      {
+        method: "POST",
+        issuerOrigin: "https://api.adrate.io",
+        path: "/public/v1/other",
+        token: "opaque-session-token",
+        idempotencyKey: "copy-submit-key",
+        json: { sourceAdvId: "70001" },
+        deadlineMs: 45_000,
+      },
+    ] as const) {
+      await expect(
+        client.requestPublic(invalid as unknown as PublicRequestInput)
+      ).rejects.toMatchObject({ kind: "invalid_response" })
+    }
+    expect(transport.requests).toHaveLength(2)
+  })
+
   it("Public JSON POST 在 fetch 前拒绝非法 Key 和非 15/120 秒 deadline", async () => {
     const client = new PublicHttpClient()
     await expect(
@@ -938,7 +1089,11 @@ describe("PublicHttpClient envelope boundary", () => {
 
   it("accepts unknown error codes from the server", async () => {
     const requestId = "unknown-code"
-    for (const code of ["NOT_A_PUBLIC_CODE", "LOCAL_STATE_UNSAFE", "FUTURE_ERROR"]) {
+    for (const code of [
+      "NOT_A_PUBLIC_CODE",
+      "LOCAL_STATE_UNSAFE",
+      "FUTURE_ERROR",
+    ]) {
       const transport = new StaticTransport({
         status: 400,
         headers: {},
@@ -966,11 +1121,15 @@ describe("HTTP retry metadata", () => {
     expect(DEADLINES_MS).toEqual({
       standard: 15_000,
       campaignRead: 45_000,
+      gmvMaxRead: 120_000,
       statusWrite: 120_000,
+      budgetWrite: 120_000,
+      ruleDryRun: 60_000,
       connect: 10_000,
     })
     expect(DEADLINES_MS.statusWrite).toBeGreaterThan(90_000)
     expect(DEADLINES_MS.statusWrite).toBeGreaterThan(110_000)
+    expect(DEADLINES_MS.budgetWrite).toBeGreaterThan(90_000)
   })
 
   it.each([
