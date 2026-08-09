@@ -15,6 +15,7 @@ import {
   localRequestId,
   usageFailure,
 } from "../errors.js"
+import { BUDGET_MODES } from "./command-families.js"
 import { StatusCommandDispatcher } from "./status-command-dispatcher.js"
 import type { LocalCredentialCoordinator } from "../auth/local-credentials.js"
 import type { CliExitCode } from "../constants.js"
@@ -31,19 +32,21 @@ import type {
   LocalErrorEnvelope,
 } from "../contracts/envelope.js"
 
-export interface StatusCommandInput {
+export interface BudgetCommandInput {
   advId?: string
   campaignId?: string
-  desiredStatus?: string
+  mode?: string
+  value?: string
   authId?: string
   idempotencyKey?: string
   requestId?: string
 }
 
-interface ValidatedStatusCommandInput {
+interface ValidatedBudgetCommandInput {
   advId: string
   campaignId: string
-  desiredStatus: "ENABLE" | "DISABLE"
+  mode: string
+  value: number
   authId: number | null
   idempotencyKey: string
   requestId?: string
@@ -54,10 +57,10 @@ function required(value: string | undefined, flag: string): string {
   return value
 }
 
-function validateStatusCommandInput(
-  input: StatusCommandInput,
+function validateBudgetCommandInput(
+  input: BudgetCommandInput,
   generateIdempotencyKey: () => string
-): ValidatedStatusCommandInput {
+): ValidatedBudgetCommandInput {
   const advId = requireTransportableResourceId(
     required(input.advId, "--adv-id"),
     "advId"
@@ -66,9 +69,19 @@ function validateStatusCommandInput(
     required(input.campaignId, "--campaign-id"),
     "campaignId"
   )
-  const desiredStatus = required(input.desiredStatus, "--set")
-  if (desiredStatus !== "enable" && desiredStatus !== "disable") {
-    throw usageFailure("--set must be enable or disable.")
+  const mode = required(input.mode, "--mode")
+  if (!BUDGET_MODES.has(mode)) {
+    throw usageFailure(
+      "--mode must be set, increase_amount, decrease_amount, increase_percent, or decrease_percent."
+    )
+  }
+  const rawValue = required(input.value, "--value")
+  const value = Number(rawValue)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw usageFailure("--value must be a positive number.")
+  }
+  if (Math.round(value * 100) / 100 !== value) {
+    throw usageFailure("--value must have at most two decimal places.")
   }
   const authId =
     input.authId === undefined
@@ -87,7 +100,8 @@ function validateStatusCommandInput(
   return {
     advId,
     campaignId,
-    desiredStatus: desiredStatus === "enable" ? "ENABLE" : "DISABLE",
+    mode,
+    value,
     authId,
     idempotencyKey,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
@@ -164,7 +178,7 @@ function prepareFailure(
   }
 }
 
-export class StatusCommandService {
+export class BudgetCommandService {
   private readonly now: () => Date
   private readonly generateIdempotencyKey: () => string
   private readonly dispatcher: Pick<StatusCommandDispatcher, "dispatch">
@@ -191,9 +205,8 @@ export class StatusCommandService {
       })
   }
 
-  async status(input: StatusCommandInput): Promise<CliOutcome<CliEnvelope>> {
-    // 这是本命令的唯一输入闸门：完成前不得读凭证、加锁或落盘。
-    const validated = validateStatusCommandInput(
+  async budget(input: BudgetCommandInput): Promise<CliOutcome<CliEnvelope>> {
+    const validated = validateBudgetCommandInput(
       input,
       this.generateIdempotencyKey
     )
@@ -205,16 +218,16 @@ export class StatusCommandService {
     }
     const prepared = await this.pending.prepare({
       idempotencyKey: validated.idempotencyKey,
-      capabilityId: "ads.campaign.status.write",
+      capabilityId: "ads.campaign.budget.write",
       credentialId: located.index.credentialId,
       issuerOrigin: located.index.issuerOrigin,
       teamId: located.credentials.teamId,
       intent: {
-        capabilityId: "ads.campaign.status.write",
+        capabilityId: "ads.campaign.budget.write",
         advId: validated.advId,
         campaignId: validated.campaignId,
         authId: validated.authId,
-        familyPayload: { desiredStatus: validated.desiredStatus },
+        familyPayload: { mode: validated.mode, value: validated.value },
       },
       now: this.now(),
     })

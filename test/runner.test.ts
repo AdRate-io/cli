@@ -27,10 +27,21 @@ function applicationWithLogout(outcome: CliOutcome): CliApplication {
     reads as unknown as ReadCommandService,
     {
       campaignStatus: { status: vi.fn() },
+      campaignBudget: { budget: vi.fn() },
+      gmvMax: { status: vi.fn(), budget: vi.fn(), roas: vi.fn() },
       commandQuery: { get: vi.fn() },
       pendingCommands: { pending: vi.fn() },
       commandResume: { resume: vi.fn() },
       feedback: { submit: vi.fn() },
+      copy: { submit: vi.fn(), preview: vi.fn() },
+      rules: {
+        create: vi.fn(),
+        update: vi.fn(),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        delete: vi.fn(),
+        dryRun: vi.fn(),
+      },
       skills: { list: vi.fn(), read: vi.fn() },
       skillsInstall: { install: vi.fn() },
     }

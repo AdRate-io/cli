@@ -1,7 +1,4 @@
-import {
-  CLI_VERSION,
-  LOWERCASE_UUID_PATTERN,
-} from "../constants.js"
+import { CLI_VERSION, LOWERCASE_UUID_PATTERN } from "../constants.js"
 import {
   assertIssuerPair,
   environmentForMachineOrigin,
@@ -14,11 +11,11 @@ import {
   isSafeIntegerInRange,
 } from "../contracts/json.js"
 import {
-  isExactM0Scope,
+  isExactCliScope,
   isValidDeviceCode,
   isValidUserCode,
 } from "../contracts/oauth.js"
-import type { CliEnvironment, M0_CAPABILITIES } from "../constants.js"
+import type { CliEnvironment, CLI_CAPABILITIES } from "../constants.js"
 
 export interface CliConfig {
   configFormatVersion: 1
@@ -71,7 +68,7 @@ export interface DeviceAuthorizationState {
   clientId: "adrate-cli"
   clientInstanceId: string
   deviceName: string | null
-  requestedScopes: [...typeof M0_CAPABILITIES]
+  requestedScopes: [...typeof CLI_CAPABILITIES]
   environment: CliEnvironment
   issuerOrigin: string
   deviceCode: string | null
@@ -167,8 +164,7 @@ export function parseTokenIndex(value: unknown): TokenIndex | null {
     !LOWERCASE_UUID_PATTERN.test(String(value.deviceGeneration)) ||
     !isSafeLocalText(value.deviceName, 128, true) ||
     !isCanonicalUtcIso(value.tokenReceivedAt) ||
-    (value.storageKind !== "keychain" &&
-      value.storageKind !== "fallback_file")
+    (value.storageKind !== "keychain" && value.storageKind !== "fallback_file")
   ) {
     return null
   }
@@ -247,7 +243,7 @@ export function parseDeviceState(
     value.clientId !== "adrate-cli" ||
     !LOWERCASE_UUID_PATTERN.test(String(value.clientInstanceId)) ||
     !isSafeLocalText(value.deviceName, 128, true) ||
-    !isExactM0Scope(value.requestedScopes) ||
+    !isExactCliScope(value.requestedScopes) ||
     environmentForMachineOrigin(value.issuerOrigin) === null ||
     typeof value.verificationUri !== "string" ||
     typeof value.verificationUriComplete !== "string" ||
@@ -335,11 +331,7 @@ export function parseDevicePollAttempt(
 ): DevicePollAttempt | null {
   if (
     !isPlainObject(value) ||
-    !hasKeys(value, [
-      "formatVersion",
-      "deviceGeneration",
-      "storageKind",
-    ]) ||
+    !hasKeys(value, ["formatVersion", "deviceGeneration", "storageKind"]) ||
     value.formatVersion !== 1 ||
     !LOWERCASE_UUID_PATTERN.test(String(value.deviceGeneration))
   ) {

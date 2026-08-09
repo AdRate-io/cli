@@ -175,6 +175,48 @@ describe("ReadCommandService HTTP mapping", () => {
       45_000,
     ],
     [
+      ["gmvmax", "stores", "--adv-id", "70001", "--auth-id", "9"],
+      "/public/v1/gmvmax/stores?advId=70001&authId=9",
+      120_000,
+    ],
+    [
+      [
+        "gmvmax",
+        "campaigns",
+        "list",
+        "--adv-id",
+        "70001",
+        "--store-id",
+        "shop-1",
+        "--promotion-type",
+        "product",
+        "--from",
+        "2026-08-01",
+        "--to",
+        "2026-08-07",
+        "--include-trend",
+        "--auth-id",
+        "9",
+      ],
+      "/public/v1/gmvmax/advertisers/70001/campaigns?storeId=shop-1&promotionType=product&from=2026-08-01&to=2026-08-07&includeTrend=true&authId=9",
+      120_000,
+    ],
+    [
+      [
+        "gmvmax",
+        "campaigns",
+        "get",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--store-id",
+        "shop-1",
+      ],
+      "/public/v1/gmvmax/advertisers/70001/campaigns/80001?storeId=shop-1",
+      120_000,
+    ],
+    [
       [
         "ads",
         "campaigns",
@@ -227,6 +269,81 @@ describe("ReadCommandService HTTP mapping", () => {
       "/public/v1/ads/advertisers/70001/reports/campaigns?startDate=2026-07-01&endDate=2026-07-31&groupBy=day&authId=42&page=2&pageSize=50",
       45_000,
     ],
+    [
+      [
+        "ads",
+        "copy",
+        "tasks",
+        "--status",
+        "partial",
+        "--page",
+        "2",
+        "--page-size",
+        "50",
+      ],
+      "/public/v1/ads/copy/tasks?status=partial&page=2&pageSize=50",
+      15_000,
+    ],
+    [["ads", "copy", "tasks"], "/public/v1/ads/copy/tasks", 15_000],
+    [
+      ["ads", "copy", "tasks", "get", "--task-id", "42"],
+      "/public/v1/ads/copy/tasks/42",
+      15_000,
+    ],
+
+    // --- rules 组路径映射 ---
+    [
+      ["rules", "options", "--rule-type", "ads", "--scope", "campaign"],
+      "/public/v1/rules/options?ruleType=ads&scope=campaign",
+      15_000,
+    ],
+    [["rules", "list"], "/public/v1/rules", 15_000],
+    [
+      [
+        "rules",
+        "list",
+        "--rule-type",
+        "ads",
+        "--keyword",
+        "cpa",
+        "--page",
+        "2",
+        "--page-size",
+        "50",
+      ],
+      "/public/v1/rules?ruleType=ads&keyword=cpa&page=2&pageSize=50",
+      15_000,
+    ],
+    [["rules", "get", "--rule-id", "42"], "/public/v1/rules/42", 15_000],
+    [
+      ["rules", "executions", "list", "--rule-id", "42", "--result", "failed"],
+      "/public/v1/rules/executions?ruleId=42&result=failed",
+      15_000,
+    ],
+    [
+      [
+        "rules",
+        "executions",
+        "list",
+        "--scope-id",
+        "80001",
+        "--from",
+        "2026-08-01",
+        "--to",
+        "2026-08-07",
+        "--page",
+        "3",
+        "--page-size",
+        "50",
+      ],
+      "/public/v1/rules/executions?scopeId=80001&from=2026-08-01&to=2026-08-07&page=3&pageSize=50",
+      15_000,
+    ],
+    [
+      ["rules", "executions", "get", "--execution-id", "1001"],
+      "/public/v1/rules/executions/1001",
+      15_000,
+    ],
   ] as const)(
     "%j 只发一次冻结 path/query，deadline=%s",
     async (argv, expectedPath, expectedDeadline) => {
@@ -265,6 +382,42 @@ describe("ReadCommandService HTTP mapping", () => {
     expect(JSON.stringify(harness.transport.requests[0])).not.toContain(
       "reserved_write_key"
     )
+  })
+
+  it("GMV Max 读取原样保留服务端 data，不复制或重组 DTO", async () => {
+    const data = {
+      campaigns: [{ campaignId: "80001", futureField: { value: 1 } }],
+      pagination: { cursor: "next" },
+    }
+    const transport = new RecordingTransport(
+      null,
+      {},
+      {
+        status: 200,
+        headers: { "x-request-id": "gmv-read" },
+        body: {
+          ok: true,
+          data,
+          meta: { requestId: "gmv-read", apiVersion: "v1" },
+        },
+      }
+    )
+    const harness = createHarness({ transport })
+    const outcome = await executeArgv(harness.service, [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop-1",
+      "--promotion-type",
+      "live",
+      "--request-id",
+      "gmv-read",
+    ])
+    expect(outcome.envelope).toMatchObject({ ok: true, data })
+    expect(transport.requests[0]).not.toHaveProperty("idempotencyKey")
   })
 
   it("不因 pagination 元数据自动请求下一页", async () => {
@@ -423,7 +576,53 @@ describe("ReadCommandService preflight validation", () => {
     ["ads", "campaigns", "list", "--adv-id", "70001", "--auth-id", "0"],
     ["ads", "campaigns", "list", "--adv-id", "70001", "--page", "01"],
     ["ads", "campaigns", "list", "--adv-id", "70001", "--page-size", "1001"],
-  ])("Campaign 非法输入 %j 在联网前拒绝", async (...argv) => {
+    ["ads", "copy", "tasks", "--status", "unknown"],
+    ["ads", "copy", "tasks", "--page", "0"],
+    ["ads", "copy", "tasks", "--page-size", "101"],
+    ["ads", "copy", "tasks", "get", "--task-id", "0"],
+    ["gmvmax", "stores"],
+    [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop-1",
+    ],
+    [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop/1",
+      "--promotion-type",
+      "product",
+    ],
+    [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop-1",
+      "--promotion-type",
+      "future",
+    ],
+    [
+      "gmvmax",
+      "campaigns",
+      "get",
+      "--adv-id",
+      "70001",
+      "--campaign-id",
+      "80001",
+    ],
+    ["rules", "executions", "list", "--rule-id", "42", "--page-size", "101"],
+  ])("业务命令非法输入 %j 在联网前拒绝", async (...argv) => {
     await expectUsageWithoutNetwork(argv)
   })
 
@@ -491,6 +690,49 @@ describe("ReadCommandService preflight validation", () => {
     ],
   ])("报表非法日期/groupBy %j 在联网前拒绝", async (...argv) => {
     await expectUsageWithoutNetwork(argv)
+  })
+
+  it.each([
+    ["2026-08-01", undefined],
+    [undefined, "2026-08-07"],
+    ["2026-02-29", "2026-03-01"],
+    ["2026-08-07", "2026-08-01"],
+    ["2026-07-01", "2026-07-31"],
+  ])("GMV Max 非法日期范围 %s..%s 在联网前拒绝", async (from, to) => {
+    const argv = [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop-1",
+      "--promotion-type",
+      "product",
+      ...(from === undefined ? [] : ["--from", from]),
+      ...(to === undefined ? [] : ["--to", to]),
+    ]
+    await expectUsageWithoutNetwork(argv)
+  })
+
+  it("GMV Max 日期范围接受 30 个包含首尾的自然日", async () => {
+    const harness = createHarness()
+    await executeArgv(harness.service, [
+      "gmvmax",
+      "campaigns",
+      "list",
+      "--adv-id",
+      "70001",
+      "--store-id",
+      "shop-1",
+      "--promotion-type",
+      "product",
+      "--from",
+      "2026-07-01",
+      "--to",
+      "2026-07-30",
+    ])
+    expect(harness.transport.requests).toHaveLength(1)
   })
 
   it.each([

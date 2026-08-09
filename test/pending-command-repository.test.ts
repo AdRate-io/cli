@@ -25,7 +25,7 @@ import {
   SecureFileError,
   SecureFileSystem,
 } from "../src/storage/secure-files.js"
-import { CREDENTIAL_ID, createTemporaryStateFixture } from "./helpers.js"
+import { CREDENTIAL_ID, createTemporaryStateFixture, statusIntent } from "./helpers.js"
 import type { NewPendingCommandRecord } from "../src/commands/pending-command-contract.js"
 import type { TemporaryStateFixture } from "./helpers.js"
 
@@ -40,12 +40,8 @@ function input(
     credentialId: CREDENTIAL_ID,
     issuerOrigin: "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
-      campaignId: "80001",
-      desiredStatus: "ENABLE",
-      authId: null,
-    },
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent(),
     now: NOW,
     ...overrides,
   }
@@ -68,7 +64,7 @@ describe("pending Command frozen contract", () => {
     const record = createPreparedPendingCommand(input())
 
     expect(record).toEqual({
-      formatVersion: 1,
+      formatVersion: 2,
       idempotencyKey: "abc_DEF-9",
       capabilityId: "ads.campaign.status.write",
       credentialKind: "owner_cli_session",
@@ -94,7 +90,7 @@ describe("pending Command frozen contract", () => {
   })
 
   it.each([
-    ["unknown format", { formatVersion: 2 }],
+    ["unknown format", { formatVersion: 3 }],
     ["unsafe issuer", { issuerOrigin: "https://evil.example" }],
     ["bad credential", { credentialId: "credential" }],
     ["intent hash drift", { intentHash: "0".repeat(64) }],
@@ -167,7 +163,7 @@ describe("PendingCommandRepository", () => {
       (
         await repository.prepare(
           input({
-            intent: { ...input().intent, desiredStatus: "DISABLE" },
+            intent: statusIntent({ desiredStatus: "DISABLE" }),
           })
         )
       ).kind
@@ -177,7 +173,7 @@ describe("PendingCommandRepository", () => {
         await repository.prepare(
           input({
             idempotencyKey: "opposite-key",
-            intent: { ...input().intent, desiredStatus: "DISABLE" },
+            intent: statusIntent({ desiredStatus: "DISABLE" }),
           })
         )
       ).kind

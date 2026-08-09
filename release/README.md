@@ -25,20 +25,12 @@ tarball 文件清单只有 `scripts/release-gate.mjs` 中的 `EXPECTED_TARBALL_F
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
-
-export RELEASE_COMMIT="$(git rev-parse HEAD)"
-export RELEASE_TAG="v$(node -p "require('./package.json').version")"
-export RELEASE_CHANNEL="prerelease" # 正式版改为 stable
-export RELEASE_ARTIFACT_DIR="/absolute/path/to/release-artifact"
-
-pnpm release:gate \
-  --channel "$RELEASE_CHANNEL" \
-  --tag "$RELEASE_TAG" \
-  --commit "$RELEASE_COMMIT" \
-  --artifact-dir "$RELEASE_ARTIFACT_DIR"
+pnpm release:gate
 ```
 
-`release:gate` 会要求 clean checkout，并检查仓库身份、镜像出境面、秘密、tarball 文件集、source map 和 packed smoke。它生成的本地 artifact 只用于预检；正式发布制品仍由公开仓 workflow 的 verify job 从对应 tag 生成。
+`release:gate` 会要求 clean checkout，并检查包契约、镜像出境面、秘密、tarball 文件集、source map 和 packed smoke。
+
+⚠️ **私有侧预检不要传 `--tag`/`--commit`/`--channel`/`--artifact-dir`**：这些参数会触发 `assertReleaseGitIdentity`，它要求运行目录就是 git toplevel 且 tag 已解析到 HEAD——只有公开仓 root 在 tag 推送后才满足（私有仓里 `cli/` 是子目录，必然报 "Release identity must be checked at the public repository root"）。身份校验与发布制品由公开仓 workflow 的 verify job 负责。
 
 ## 2. 单向同步公开镜像
 

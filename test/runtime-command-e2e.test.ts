@@ -241,7 +241,10 @@ function jsonResponse(
 
 async function createHarness(
   handler: TransportHandler,
-  options: { key?: string } = {}
+  options: {
+    key?: string
+    readRuleFile?: (path: string) => Promise<string>
+  } = {}
 ): Promise<RuntimeHarness> {
   const fixture = await createTemporaryStateFixture()
   fixtures.push(fixture)
@@ -261,6 +264,9 @@ async function createHarness(
       ADRATE_NO_SKILLS_NOTIFIER: "1",
     },
     generateIdempotencyKey: () => options.key ?? KEY,
+    ...(options.readRuleFile === undefined
+      ? {}
+      : { readRuleFile: options.readRuleFile }),
     progress: () => undefined,
   })
   let index!: TokenIndex
@@ -433,6 +439,59 @@ describe("production runtime Auth entry E2E", () => {
 })
 
 describe("production runtime Command entry E2E", () => {
+  it("wires rules create from parser through file input to one Public POST", async () => {
+    const harness = await createHarness(
+      (input) => {
+        const id = requestId(input)
+        return Promise.resolve({
+          status: 200,
+          requestId: id,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": id,
+          },
+          text: JSON.stringify({
+            ok: true,
+            data: {
+              ruleId: 42,
+              name: "Runtime Rule",
+              enabled: false,
+              duplicate: false,
+            },
+            meta: { requestId: id, apiVersion: "v1" },
+          }),
+        })
+      },
+      {
+        key: "runtime_suffix",
+        readRuleFile: () => Promise.resolve('{"name":"Runtime Rule"}'),
+      }
+    )
+
+    const result = await runJson(harness.runtime, [
+      "rules",
+      "create",
+      "--file",
+      "runtime-rule.json",
+      "--request-id",
+      "runtime_rule_request",
+    ])
+
+    expect(result.exitCode).toBe(0)
+    expect(harness.transport.requests).toEqual([
+      {
+        method: "POST",
+        issuerOrigin: PRODUCTION_MACHINE_ORIGIN,
+        path: "/public/v1/rules/create",
+        deadlineMs: 15_000,
+        token: OWNER_SESSION_TOKEN,
+        idempotencyKey: "rule-create-runtime_suffix",
+        json: { name: "Runtime Rule" },
+        requestId: "runtime_rule_request",
+      },
+    ])
+  })
+
   it("wires status, pending, both GET selectors, pending resume, and final cleanup through runCli", async () => {
     let serverStatus: "pending" | "succeeded" = "pending"
     const harness = await createHarness((input) => {

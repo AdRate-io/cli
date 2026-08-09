@@ -10,8 +10,12 @@ import { PendingCommandRepository } from "./commands/pending-command-repository.
 import { PendingCommandService } from "./commands/pending-command-service.js"
 import { ReadCommandService } from "./commands/read-service.js"
 import { StatusCommandDispatcher } from "./commands/status-command-dispatcher.js"
+import { BudgetCommandService } from "./commands/budget-command-service.js"
 import { StatusCommandService } from "./commands/status-command-service.js"
 import { FeedbackCommandService } from "./commands/feedback-command-service.js"
+import { GmvMaxCommandService } from "./commands/gmvmax-command-service.js"
+import { RuleCommandService } from "./commands/rule-command-service.js"
+import { CopyCommandService } from "./commands/copy-command-service.js"
 import { PublicHttpClient } from "./http/client.js"
 import {
   CredentialStore,
@@ -41,6 +45,9 @@ export interface CliRuntimeOptions {
   sleep?: (milliseconds: number) => Promise<void>
   generateIdempotencyKey?: () => string
   readFeedbackStdin?: () => Promise<string>
+  readRuleFile?: (path: string) => Promise<string>
+  readRuleStdin?: () => Promise<string>
+  readCopyFile?: (path: string) => Promise<string>
   progress?: (message: string) => void
   packageRoot?: string
   installedSkillsRoot?: string
@@ -56,10 +63,14 @@ export interface CliRuntime {
   auth: AuthService
   reads: ReadCommandService
   campaignStatus: StatusCommandService
+  campaignBudget: BudgetCommandService
+  gmvMax: GmvMaxCommandService
   commandQuery: CommandQueryService
   pendingCommands: PendingCommandService
   commandResume: CommandResumeService
   feedback: FeedbackCommandService
+  rules: RuleCommandService
+  copy: CopyCommandService
   dispatcher: StatusCommandDispatcher
   pendingRepository: PendingCommandRepository
   http: PublicHttpClient
@@ -140,6 +151,27 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
         : {}),
     }
   )
+  const campaignBudget = new BudgetCommandService(
+    http,
+    local,
+    pendingRepository,
+    {
+      environment,
+      dispatcher,
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.generateIdempotencyKey
+        ? { generateIdempotencyKey: options.generateIdempotencyKey }
+        : {}),
+    }
+  )
+  const gmvMax = new GmvMaxCommandService(http, local, pendingRepository, {
+    environment,
+    dispatcher,
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.generateIdempotencyKey
+      ? { generateIdempotencyKey: options.generateIdempotencyKey }
+      : {}),
+  })
   const pendingCommands = new PendingCommandService(
     pendingRepository,
     state,
@@ -158,6 +190,21 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     ...(options.readFeedbackStdin
       ? { readStdin: options.readFeedbackStdin }
       : {}),
+  })
+  const rules = new RuleCommandService(http, local, {
+    environment,
+    ...(options.generateIdempotencyKey
+      ? { generateIdempotencyKeySuffix: options.generateIdempotencyKey }
+      : {}),
+    ...(options.readRuleFile ? { readFile: options.readRuleFile } : {}),
+    ...(options.readRuleStdin ? { readStdin: options.readRuleStdin } : {}),
+  })
+  const copy = new CopyCommandService(http, local, {
+    environment,
+    ...(options.generateIdempotencyKey
+      ? { generateIdempotencyKey: options.generateIdempotencyKey }
+      : {}),
+    ...(options.readCopyFile ? { readFile: options.readCopyFile } : {}),
   })
   const skillCatalog = new SkillCatalog(
     options.packageRoot ?? DEFAULT_PACKAGE_ROOT
@@ -180,10 +227,14 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     reads,
     {
       campaignStatus,
+      campaignBudget,
+      gmvMax,
       commandQuery,
       pendingCommands,
       commandResume,
       feedback,
+      copy,
+      rules,
       skills,
       skillsInstall,
     },
@@ -195,10 +246,14 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     auth,
     reads,
     campaignStatus,
+    campaignBudget,
+    gmvMax,
     commandQuery,
     pendingCommands,
     commandResume,
     feedback,
+    copy,
+    rules,
     dispatcher,
     pendingRepository,
     http,

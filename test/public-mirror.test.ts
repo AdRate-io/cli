@@ -667,6 +667,7 @@ describe("public mirror commit and apply gates", () => {
         [
           "LICENSE",
           "README.md",
+          "README.zh-CN.md",
           "dist/bin.d.ts",
           "dist/bin.js",
           "dist/bin.js.map",

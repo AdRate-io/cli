@@ -108,7 +108,6 @@ describe("exact local state schemas", () => {
     } as Record<string, unknown>
     delete pollAttempt.deviceGeneration
     expect(parseDevicePollAttempt(pollAttempt)).toBeNull()
-
   })
 
   it("rejects config and reservations whose environment does not match issuer", () => {
@@ -158,7 +157,7 @@ describe("exact local state schemas", () => {
     ).toBeNull()
   })
 
-  it("requires the exact ordered M0 scope and canonical Device URL pairing", () => {
+  it("requires the exact ordered CLI scope and canonical Device URL pairing", () => {
     const swapped = [...validDeviceState().requestedScopes]
     ;[swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!]
     expect(

@@ -125,14 +125,15 @@ describe("PublicCommandDto decoder", () => {
   })
 
   it("does not require or project unconsumed display fields", () => {
-    const { reason: _reason, suggestedAction: _action, ...withoutDisplay } =
-      pendingCommand({
-        status: "failed",
-        isFinal: true,
-      })
-    const result = decodePublicCommandDto(
-      withoutDisplay
-    )
+    const {
+      reason: _reason,
+      suggestedAction: _action,
+      ...withoutDisplay
+    } = pendingCommand({
+      status: "failed",
+      isFinal: true,
+    })
+    const result = decodePublicCommandDto(withoutDisplay)
     expect(result).not.toBeNull()
     expect(result).not.toHaveProperty("reason")
     expect(result).not.toHaveProperty("suggestedAction")
@@ -148,12 +149,19 @@ describe("PublicCommandDto decoder", () => {
     ["non-UUID command", pendingCommand({ commandId: "command-1" })],
     ["unsafe idempotency key", pendingCommand({ idempotencyKey: "../key" })],
     ["empty status", pendingCommand({ status: "" })],
-    ["invalid verificationBasis type", pendingCommand({ verificationBasis: 1 })],
+    [
+      "invalid verificationBasis type",
+      pendingCommand({ verificationBasis: 1 }),
+    ],
     ["missing target", pendingCommand({ target: null })],
     [
       "invalid advertiser ID",
       pendingCommand({
-        target: { advertiserId: "", campaignId: "80001", desiredStatus: "ENABLE" },
+        target: {
+          advertiserId: "",
+          campaignId: "80001",
+          desiredStatus: "ENABLE",
+        },
       }),
     ],
   ])("rejects %s", (_label, value) => {
@@ -180,5 +188,93 @@ describe("PublicCommandDto decoder", () => {
     const command = pendingCommand()
     const result = decodePublicCommandData({ command, _notice: {} })
     expect(result).not.toBeNull()
+  })
+
+  it("decodes a locked Budget target with immutable value and targetBudget", () => {
+    const value = pendingCommand({
+      capabilityId: "ads.campaign.budget.write",
+      target: {
+        advertiserId: "70001",
+        campaignId: "80001",
+        mode: "increase_percent",
+        value: 10,
+        targetBudget: 220,
+      },
+    })
+
+    expect(decodePublicCommandDto(value)).toMatchObject({
+      target: {
+        advertiserId: "70001",
+        campaignId: "80001",
+        mode: "increase_percent",
+        value: 10,
+        targetBudget: 220,
+      },
+    })
+  })
+
+  it("rejects a locked Budget target that omits the immutable input value", () => {
+    const value = pendingCommand({
+      capabilityId: "ads.campaign.budget.write",
+      target: {
+        advertiserId: "70001",
+        campaignId: "80001",
+        mode: "set",
+        targetBudget: 300,
+      },
+    })
+
+    expect(decodePublicCommandDto(value)).toBeNull()
+  })
+
+  it.each([
+    ["gmvmax.campaign.status.write", { desiredStatus: "DISABLE" }],
+    [
+      "gmvmax.campaign.budget.write",
+      { mode: "increase_percent", value: 10, targetBudget: 550 },
+    ],
+    [
+      "gmvmax.campaign.roas.write",
+      { mode: "set", value: 2.5, targetRoas: 2.5 },
+    ],
+  ] as const)(
+    "解码 %s 的服务端 Command target",
+    (capabilityId, familyTarget) => {
+      expect(
+        decodePublicCommandDto(
+          pendingCommand({
+            capabilityId,
+            target: {
+              advertiserId: "70001",
+              campaignId: "80001",
+              ...familyTarget,
+            },
+          })
+        )
+      ).toMatchObject({
+        capabilityId,
+        target: {
+          advertiserId: "70001",
+          campaignId: "80001",
+          ...familyTarget,
+        },
+      })
+    }
+  )
+
+  it("GMV Max 数值 target 缺原始 value 时 fail-closed", () => {
+    expect(
+      decodePublicCommandDto(
+        pendingCommand({
+          capabilityId: "gmvmax.campaign.roas.write",
+          target: {
+            advertiserId: "70001",
+            campaignId: "80001",
+            mode: "set",
+            targetRoas: 2.5,
+          },
+        })
+      )
+    ).toBeNull()
   })
 })

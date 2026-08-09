@@ -2,7 +2,7 @@ import {
   BASE64URL_PATTERN,
   CLIENT_ID,
   LOWERCASE_UUID_PATTERN,
-  M0_CAPABILITIES,
+  CLI_CAPABILITIES,
   OWNER_TOKEN_PREFIX,
 } from "../constants.js"
 import { validateBrowserUrl } from "../config/issuer.js"
@@ -243,11 +243,11 @@ export function decodeOAuthError(text: string): OAuthErrorResponse | null {
   }
 }
 
-export function isExactM0Scope(value: unknown): boolean {
+export function isExactCliScope(value: unknown): boolean {
   return (
     Array.isArray(value) &&
-    value.length === M0_CAPABILITIES.length &&
-    M0_CAPABILITIES.every((capability, index) => value[index] === capability)
+    value.length === CLI_CAPABILITIES.length &&
+    CLI_CAPABILITIES.every((capability, index) => value[index] === capability)
   )
 }
 

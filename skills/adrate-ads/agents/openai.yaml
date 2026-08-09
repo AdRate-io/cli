@@ -1,4 +1,4 @@
 interface:
   display_name: "AdRate Ads Operations"
-  short_description: "Inspect Campaigns and apply safe status changes"
-  default_prompt: "Use $adrate-ads to inspect AdRate Campaigns and make a safe ENABLE or DISABLE change."
+  short_description: "Inspect Campaigns, run Copy tasks, and safely manage writes"
+  default_prompt: "Use $adrate-ads to inspect Ads and GMV Max Campaigns, run Campaign Copy tasks, and safely manage Campaign status, budgets, ROAS, and automation rules."

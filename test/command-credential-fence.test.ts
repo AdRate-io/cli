@@ -12,6 +12,7 @@ import {
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
   deferred,
+  statusIntent,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -108,12 +109,8 @@ async function createHarness(
     credentialId: CREDENTIAL_ID,
     issuerOrigin: "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
-      campaignId: "80001",
-      desiredStatus: "ENABLE",
-      authId: null,
-    },
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent(),
     now: NOW,
   })
   if (record.kind !== "created") throw new Error("Expected pending record")

@@ -56,6 +56,7 @@ describe("Public TikTok opaque resource ID", () => {
     ["70\u007f01", "advId"],
     ["a".repeat(51), "advId"],
     ["c".repeat(129), "campaignId"],
+    ["s".repeat(129), "storeId"],
   ] as const)("拒绝非法 %s (%s)", (value, kind) => {
     expect(isValidResourceId(value, kind)).toBe(false)
     expectUsage(() => requireTransportableResourceId(value, kind))
@@ -69,6 +70,21 @@ describe("Public TikTok opaque resource ID", () => {
       expectUsage(() => requireTransportableResourceId(value, "campaignId"))
     }
   )
+
+  it("storeId 复用 128 字符真源并返回精确 flag 错误", () => {
+    expect(requireTransportableResourceId("s".repeat(128), "storeId")).toBe(
+      "s".repeat(128)
+    )
+    expect(
+      expectUsage(() =>
+        requireTransportableResourceId("s".repeat(129), "storeId")
+      ).message
+    ).toBe("--store-id is invalid.")
+    expect(
+      expectUsage(() => requireTransportableResourceId("shop/1", "storeId"))
+        .message
+    ).toBe("--store-id cannot be transported by the CLI raw-path contract.")
+  })
 })
 
 describe("query integer parsing", () => {

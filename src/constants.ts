@@ -8,16 +8,26 @@ export const PRODUCTION_BROWSER_ORIGIN = "https://app.adrate.io"
 export const TEST_MACHINE_ORIGIN = "https://api.test.adrate.io"
 export const TEST_BROWSER_ORIGIN = "https://test.adrate.io"
 
-export const M0_CAPABILITIES = Object.freeze([
+export const CLI_CAPABILITIES = Object.freeze([
   "identity.read",
   "connections.read",
   "ads.campaign.read",
   "ads.report.read",
+  "ads.copy.read",
+  "ads.copy.write",
   "ads.campaign.status.write",
+  "ads.campaign.budget.write",
   "feedback.write",
+  "rules.read",
+  "rules.write",
+  "rules.dryrun",
+  "gmvmax.read",
+  "gmvmax.campaign.status.write",
+  "gmvmax.campaign.budget.write",
+  "gmvmax.campaign.roas.write",
 ] as const)
 
-export const M0_SCOPE = M0_CAPABILITIES.join(" ")
+export const CLI_SCOPE = CLI_CAPABILITIES.join(" ")
 
 export const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
@@ -29,7 +39,10 @@ export const OWNER_TOKEN_PREFIX = "adr_owner_"
 export const DEADLINES_MS = Object.freeze({
   standard: 15_000,
   campaignRead: 45_000,
+  gmvMaxRead: 120_000,
+  ruleDryRun: 60_000,
   statusWrite: 120_000,
+  budgetWrite: 120_000,
   connect: 10_000,
 })
 

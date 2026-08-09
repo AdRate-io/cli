@@ -15,10 +15,33 @@ const EXPECTED = Object.freeze({
   idempotencyKey: "abc_DEF-9",
   capabilityId: "ads.campaign.status.write",
   intent: Object.freeze({
+    capabilityId: "ads.campaign.status.write" as const,
     advId: "70001",
     campaignId: "80001",
-    desiredStatus: "ENABLE" as const,
     authId: 42,
+    familyPayload: Object.freeze({ desiredStatus: "ENABLE" as const }),
+  }),
+})
+const EXPECTED_BUDGET = Object.freeze({
+  idempotencyKey: "budget_key",
+  capabilityId: "ads.campaign.budget.write",
+  intent: Object.freeze({
+    capabilityId: "ads.campaign.budget.write" as const,
+    advId: "70001",
+    campaignId: "80001",
+    authId: 42,
+    familyPayload: Object.freeze({ mode: "increase_percent", value: 10 }),
+  }),
+})
+const EXPECTED_GMV_ROAS = Object.freeze({
+  idempotencyKey: "gmv_roas_key",
+  capabilityId: "gmvmax.campaign.roas.write",
+  intent: Object.freeze({
+    capabilityId: "gmvmax.campaign.roas.write" as const,
+    advId: "70001",
+    campaignId: "80001",
+    authId: 9,
+    familyPayload: Object.freeze({ mode: "set", value: 2.5 }),
   }),
 })
 
@@ -34,7 +57,7 @@ function pendingCommand(overrides: Record<string, unknown> = {}) {
     target: {
       advertiserId: EXPECTED.intent.advId,
       campaignId: EXPECTED.intent.campaignId,
-      desiredStatus: EXPECTED.intent.desiredStatus,
+      desiredStatus: EXPECTED.intent.familyPayload.desiredStatus,
     },
     beforeStatus: null,
     afterStatus: null,
@@ -47,6 +70,36 @@ function pendingCommand(overrides: Record<string, unknown> = {}) {
     lastReconcileAt: null,
     ...overrides,
   }
+}
+
+function budgetCommand(overrides: Record<string, unknown> = {}) {
+  return pendingCommand({
+    idempotencyKey: EXPECTED_BUDGET.idempotencyKey,
+    capabilityId: EXPECTED_BUDGET.capabilityId,
+    target: {
+      advertiserId: EXPECTED_BUDGET.intent.advId,
+      campaignId: EXPECTED_BUDGET.intent.campaignId,
+      mode: EXPECTED_BUDGET.intent.familyPayload.mode,
+      value: EXPECTED_BUDGET.intent.familyPayload.value,
+      targetBudget: 220,
+    },
+    ...overrides,
+  })
+}
+
+function gmvRoasCommand(overrides: Record<string, unknown> = {}) {
+  return pendingCommand({
+    idempotencyKey: EXPECTED_GMV_ROAS.idempotencyKey,
+    capabilityId: EXPECTED_GMV_ROAS.capabilityId,
+    target: {
+      advertiserId: EXPECTED_GMV_ROAS.intent.advId,
+      campaignId: EXPECTED_GMV_ROAS.intent.campaignId,
+      mode: EXPECTED_GMV_ROAS.intent.familyPayload.mode,
+      value: EXPECTED_GMV_ROAS.intent.familyPayload.value,
+      targetRoas: 2.5,
+    },
+    ...overrides,
+  })
 }
 
 function succeededCommand() {
@@ -327,11 +380,7 @@ describe("Status Command response evidence", () => {
       },
       { ...succeededCommand(), isFinal: false },
     ]) {
-      const result = decideStatusPendingCommand(
-        success(command),
-        200,
-        EXPECTED
-      )
+      const result = decideStatusPendingCommand(success(command), 200, EXPECTED)
       expect(result.exitCode).toBe(5)
       expect(result.action).toBe("retain_unknown")
     }
@@ -344,6 +393,87 @@ describe("Status Command response evidence", () => {
     expect(
       decideStatusPendingCommand(success(unknownCommand(true)), 200, EXPECTED)
     ).toMatchObject({ action: "remove", exitCode: 5 })
+  })
+})
+
+describe("Budget Command response identity", () => {
+  it("matches locked targets by immutable mode and value", () => {
+    expect(
+      decodeStatusCommandResponse(success(budgetCommand()), EXPECTED_BUDGET)
+    ).toMatchObject({ kind: "command", source: "success" })
+  })
+
+  it.each([
+    ["mode", { mode: "set" }],
+    ["value", { value: 11 }],
+  ])(
+    "rejects a locked target with a different %s",
+    (_label, targetOverride) => {
+      const response = success(
+        budgetCommand({
+          target: {
+            advertiserId: EXPECTED_BUDGET.intent.advId,
+            campaignId: EXPECTED_BUDGET.intent.campaignId,
+            mode: EXPECTED_BUDGET.intent.familyPayload.mode,
+            value: EXPECTED_BUDGET.intent.familyPayload.value,
+            targetBudget: 220,
+            ...targetOverride,
+          },
+        })
+      )
+
+      expect(decodeStatusCommandResponse(response, EXPECTED_BUDGET)).toEqual({
+        kind: "invalid",
+        reason: "command_identity",
+      })
+    }
+  )
+})
+
+describe("GMV Max Command response evidence", () => {
+  it("ROAS 只在终态且 afterStatus 命中锁定 target 时报告成功", () => {
+    const verified = gmvRoasCommand({
+      status: "succeeded",
+      isFinal: true,
+      suggestedAction: null,
+      beforeStatus: "2.0",
+      afterStatus: "2.5",
+      verificationBasis: "observed_target_state",
+      completedAt: CREATED_AT,
+      recoverableUntil: null,
+    })
+    expect(
+      decideStatusPendingCommand(success(verified), 200, EXPECTED_GMV_ROAS)
+    ).toMatchObject({ action: "remove", exitCode: 0 })
+
+    for (const invalid of [
+      { ...verified, afterStatus: "2.4" },
+      { ...verified, verificationBasis: null },
+      { ...verified, isFinal: false },
+    ]) {
+      expect(
+        decideStatusPendingCommand(success(invalid), 200, EXPECTED_GMV_ROAS)
+      ).toMatchObject({ action: "retain_unknown", exitCode: 5 })
+    }
+  })
+
+  it("ROAS 锁定 target 必须仍与原始 mode/value 完全一致", () => {
+    expect(
+      decodeStatusCommandResponse(
+        success(
+          gmvRoasCommand({
+            target: {
+              advertiserId: "70001",
+              campaignId: "80001",
+              mode: "set",
+              value: 2.6,
+              targetRoas: 2.5,
+            },
+          })
+        ),
+        EXPECTED_GMV_ROAS
+      )
+    ).toEqual({ kind: "invalid", reason: "command_identity" })
   })
 })
 

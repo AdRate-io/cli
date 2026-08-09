@@ -8,6 +8,7 @@ import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
+  statusIntent,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -96,12 +97,8 @@ async function seed(input: SeedInput) {
     credentialId: input.credentialId ?? CREDENTIAL_ID,
     issuerOrigin: input.issuerOrigin ?? "https://api.adrate.io",
     teamId: input.teamId ?? 42,
-    intent: {
-      advId: "70001",
-      campaignId: "80001",
-      desiredStatus: "ENABLE",
-      authId: 9,
-    },
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent({ authId: 9 }),
     now: new Date(input.createdAt ?? DEFAULT_CREATED_AT),
   })
   if (created.kind !== "created") {

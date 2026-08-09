@@ -1,41 +1,44 @@
-# Accio Work Connector 兼容性核验
+# Accio Work 兼容性记录
 
-核验日期：2026-08-01。范围决策更新：2026-08-02。
+核验日期：2026-08-08。
 
-**范围决策（2026-08-02，2026-08-05 更新发布边界）**：**@adrate/cli 第一版不支持 Accio connector。** 我们在检索范围内没有找到可据以实现和验证 custom Connector 的正式合同，按"不猜接口"的原则没有做适配，留到后续版本。CLI-CLEANUP 已删除旧 external gate/evidence/pin/readiness 机制，Accio 不进入现行 npm 发布流程；本文件只记录"尚未适配"的事实和重新评估条件。
+本文件记录 AdRate 可保证的 CLI 兼容性事实，不是 Accio 官方 validator 输出，也不把第三方平台未公开信息写成结论。Accio Plugin manifest、Connector、平台专用 Skill 与原始自检证据位于私有仓库范围，不进入 npm 包或 CLI 公开镜像。
 
-结论：正式适配保持 `BLOCKED`。**这是对我们检索结果的记录，不是对 Accio 官方资料完备性的判断。** 截至核验日，我们在下列公开入口中未能找到 custom Connector manifest 的 Schema、目录/文件名、device-code 字段、官方 validator 命令或 import smoke 命令。因此本仓库没有生成 connector manifest，也没有把冻结设计稿中的历史 API Key 形状改写成看似有效的 device-code manifest。
+## 当前结论
 
-## 我们检索过的公开入口
+- CLI 已提供 `auth login --device` 的通用 device-code 机器输出、凭据归一化、连接态检查与 logout 本地状态清理。
+- 私有 Accio Plugin 的 Phase A-D(macOS) 已于 2026-08-06 完成本地导入与自检，既有加权结果为 4.85/5.0。
+- npm 当前已发布版本与私有 Accio Plugin 精确 pin 均为 `0.1.0-beta.7`。
+- CLI 能力扩展 Phase 1-4 已完成本地源码，固定签发 16 项 capability，但这些新增能力尚未发布新的不可变 prerelease，因此当前 Accio pin 不承载本轮源码。
+- Windows 实测、使用新 prerelease 的重新导入验证与 Accio 平台审核仍待完成，不能写成已通过或已上线。
 
-| 资料                        | URL                                                   | 我们看到的                                          | 我们未找到的                                             |
-| --------------------------- | ----------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| Accio Work Connector guide  | https://www1.accio.com/work/doc?slug=connectors-guide | 公开的 Connector 使用说明                           | custom manifest Schema/目录、device-code 字段、validator |
-| Accio Work changelog        | https://www1.accio.com/work/doc?slug=changelog        | 核验时可见的最新版本为 v0.25.0，发布日期 2026-07-22 | 上述 custom Connector 合同的补充说明                     |
-| 官方 npm 包 `@accio-ai/cli` | https://www.npmjs.com/package/@accio-ai/cli           | 公开的 CLI 包入口                                   | 可据以实现和验证 custom Connector 的 Schema/validator    |
+## AdRate 可保证的机器合同
 
-⚠️ **这三行只描述我们的检索结果，不构成对 Accio 的任何断言。** 相关合同完全可能存在于 Accio 的私有控制台、受限文档、我们未检索到的位置或更新的版本中。拿到官方 schema/tool/access 后必须重新核验并记录精确版本、发布日期、命令和脱敏输出。
-
-## 已冻结的 AdRate 输入，不是 Accio 字段声明
-
-下列语义来自 AdRate T01-T10 合同，只能作为未来映射输入，不能据此猜 Accio 字段名：
-
-- OAuth 模式为 Device Authorization，不回退 API Key-first。
-- production 发码与 token URL 分别为 `https://api.adrate.io/oauth/device/code`、`https://api.adrate.io/oauth/token`；test issuer 必须隔离。
+- OAuth 使用 Device Authorization，不回退 API Key/client secret。
+- production 发码与 token URL 分别为 `https://api.adrate.io/oauth/device/code`、`https://api.adrate.io/oauth/token`；test issuer 独立。
 - `client_id=adrate-cli`。
-- scope 精确为 `identity.read connections.read ads.campaign.read ads.report.read ads.campaign.status.write feedback.write`。
-- 单活动 Session，预期 `multiAccount=false`。
-- 可执行程序为 `adrate`，logout 命令为 `adrate auth logout`。
-- 连接态只观察用户目录下 `.adrate/credentials.json`；该文件不含 Token，Token 仍进 Keychain 或安全 fallback。
+- `auth login --device` 先输出一行 device-code JSON，再继续有界轮询；与 `--json` 同用时最终 envelope 是第二行 JSON。
+- Session 固定一个团队，不支持团队切换、多 Profile、任意 base URL 或开发 issuer。
+- 连接态只读取用户目录下 `.adrate/credentials.json`；该文件不保存 Token，Token 进入 Keychain 或受保护 fallback。
+- CLI 源码的授权 scope 是包根 `README.md` 所列精确有序 16 项 capability。
 
-## 解锁条件
+## 版本与验证矩阵
 
-只有以下资料我们都拿到了，才能创建 manifest、更新兼容性结论并重新评估是否纳入产品范围：
+| 对象 | 版本或状态 | 已验证范围 |
+| --- | --- | --- |
+| npm 当前发布 | `0.1.0-beta.7` | 已发布，dist-tag `next` |
+| 私有 Accio CLI/Connector pin | `0.1.0-beta.7` | macOS 本地导入与自检已完成 |
+| Phase 1-4 本地源码 | 16 项 capability | 单测、类型与本地制品门禁；尚未发布 |
+| 下一 prerelease | 待发布时确定 | 未发布、未更新 pin、未做平台验证 |
+| Windows | 待 Boss 实测 | 未完成 |
+| Accio 平台审核 | 待外部提交 | 未完成 |
 
-1. Accio custom Connector 的 manifest Schema、规定目录/文件名和 device-code 字段合同。
-2. 官方 validator 的名称、版本、安装来源和可复现命令。
-3. 官方 import smoke 的可复现命令与脱敏 PASS 输出。
-4. Accio 真实沙箱中 device-code、六项 M0 scope、无 API Key/client secret、连接态、logout 双清、0600 fallback 的实测。
-5. Boss 确认真实账户规模/轮询节奏可被 3000 单位/日覆盖。
+## 后续门禁
 
-在解锁前不得创建任何猜测性 manifest；本地 CLI build/test 和 npm 发布不因外部资料缺失而失败。
+1. Boss 完成测试环境与正式环境 E2E，以及 Windows 普通用户环境验收。
+2. 选择新的 prerelease 版本号，按单向镜像与单制品链路发布，并核验 npm 精确版本。
+3. 仅在发布成功后更新私有 `clis.json` 与 `connectors.json` 的两个精确 pin。
+4. 使用新 pin 重新导入 Accio，复核 device-code、16 项 scope、连接态、logout 与 fallback 权限。
+5. 完成平台审核所需的外部提交与结果记录。
+
+在以上门禁完成前，不修改 beta.7 pin，不声称 Phase 1-4 已通过 Accio 或已经上线。

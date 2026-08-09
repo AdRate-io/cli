@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SecureFileSystem } from "../src/storage/secure-files.js"
 import { createCliPaths } from "../src/storage/paths.js"
+import type { PendingCommandIntent } from "../src/commands/command-families.js"
 import type {
   CliConfig,
   CredentialMetadata,
@@ -21,6 +22,18 @@ export const TOKEN_SECRET = "A".repeat(43)
 export const OWNER_SESSION_TOKEN = `adr_owner_${CREDENTIAL_ID}_${TOKEN_SECRET}`
 export const DEVICE_CODE = "A".repeat(43)
 export const NOW_ISO = "2026-07-31T08:00:00.000Z"
+
+/**
+ * 随包 Skill 壳声明的最低 CLI 版本，以及版本不足时给 Agent 的安装指令。
+ * 唯一真源是 `cli/skills/<name>/SKILL.md` 的 frontmatter，这里镜像它以便断言。
+ *
+ * prerelease 期间两者必须成对写成「精确 prerelease 版本 + @next」：
+ * prerelease 只打 next tag，`npm install -g @adrate/cli` 解析的是 latest，
+ * 装不到该版本，Agent 会陷入「判定版本过期 → 安装 → 仍然过期」的重装环路。
+ * 发 stable 版时同步改回 "0.1.0" 与不带 tag 的安装命令。
+ */
+export const BUNDLED_SKILL_MIN_CLI_VERSION = "0.1.0-beta.8"
+export const BUNDLED_SKILL_INSTALL_COMMAND = "npm install -g @adrate/cli@next"
 
 export interface TemporaryStateFixture {
   parent: string
@@ -127,8 +140,18 @@ export function validDeviceState(
       "connections.read",
       "ads.campaign.read",
       "ads.report.read",
+      "ads.copy.read",
+      "ads.copy.write",
       "ads.campaign.status.write",
+      "ads.campaign.budget.write",
       "feedback.write",
+      "rules.read",
+      "rules.write",
+      "rules.dryrun",
+      "gmvmax.read",
+      "gmvmax.campaign.status.write",
+      "gmvmax.campaign.budget.write",
+      "gmvmax.campaign.roas.write",
     ],
     environment: "production",
     issuerOrigin: "https://api.adrate.io",
@@ -167,5 +190,50 @@ export function validDevicePollAttempt(
     deviceGeneration: DEVICE_GENERATION,
     storageKind: "keychain",
     ...overrides,
+  }
+}
+
+/**
+ * 构造 status 家族的泛化 PendingCommandIntent。
+ * 测试 helper——避免每个测试文件重复写 capabilityId + familyPayload。
+ */
+export function statusIntent(
+  overrides: {
+    advId?: string
+    campaignId?: string
+    desiredStatus?: "ENABLE" | "DISABLE"
+    authId?: number | null
+  } = {}
+): PendingCommandIntent {
+  return {
+    capabilityId: "ads.campaign.status.write",
+    advId: overrides.advId ?? "70001",
+    campaignId: overrides.campaignId ?? "80001",
+    authId: overrides.authId ?? null,
+    familyPayload: { desiredStatus: overrides.desiredStatus ?? "ENABLE" },
+  }
+}
+
+/**
+ * 构造 budget 家族的泛化 PendingCommandIntent。
+ */
+export function budgetIntent(
+  overrides: {
+    advId?: string
+    campaignId?: string
+    mode?: string
+    value?: number
+    authId?: number | null
+  } = {}
+): PendingCommandIntent {
+  return {
+    capabilityId: "ads.campaign.budget.write",
+    advId: overrides.advId ?? "70001",
+    campaignId: overrides.campaignId ?? "80001",
+    authId: overrides.authId ?? null,
+    familyPayload: {
+      mode: overrides.mode ?? "set",
+      value: overrides.value ?? 300,
+    },
   }
 }

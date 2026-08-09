@@ -17,6 +17,7 @@ import { renderOutcome } from "../src/output.js"
 import { SkillCatalog } from "../src/skills/skill-catalog.js"
 import { sha256SkillText } from "../src/skills/skill-contract.js"
 import { SkillsService } from "../src/skills/skills-service.js"
+import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const roots: Array<string> = []
@@ -56,7 +57,7 @@ afterEach(async () => {
 })
 
 describe("SkillsService", () => {
-  it("lists only M0 Skills in stable name order with CLI version metadata", async () => {
+  it("lists only CLI Skills in stable name order with CLI version metadata", async () => {
     const root = await packageFixture()
     const outcome = await new SkillsService(new SkillCatalog(root)).list()
 
@@ -67,14 +68,14 @@ describe("SkillsService", () => {
         skills: [
           {
             name: "adrate-ads",
-            version: "1.0.0",
-            minCliVersion: "0.1.0",
+            version: "1.4.0",
+            minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
           {
             name: "adrate-shared",
-            version: "1.1.0",
-            minCliVersion: "0.1.0-beta.6",
+            version: "1.4.0",
+            minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
         ],
@@ -104,7 +105,7 @@ describe("SkillsService", () => {
     if (outcome.envelope.ok) {
       expect(outcome.envelope.data).toStrictEqual({
         name: "adrate-shared",
-        version: "1.1.0",
+        version: "1.4.0",
         path: "SKILL.md",
         content: expected,
         sha256: sha256SkillText(expected),

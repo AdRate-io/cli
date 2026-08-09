@@ -63,6 +63,103 @@ describe("parseArguments", () => {
       ["feedback", "--category", "bug", "--message", "Something failed"],
       "feedback.submit",
     ],
+    [
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+        "--value",
+        "300",
+      ],
+      "ads.campaigns.budget",
+    ],
+    [["gmvmax", "stores"], "gmvmax.stores"],
+    [["gmvmax", "campaigns", "list"], "gmvmax.campaigns.list"],
+    [["gmvmax", "campaigns", "get"], "gmvmax.campaigns.get"],
+    [
+      [
+        "gmvmax",
+        "campaigns",
+        "status",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--set",
+        "enable",
+        "--auth-id",
+        "9",
+      ],
+      "gmvmax.campaigns.status",
+    ],
+    [
+      [
+        "gmvmax",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+        "--value",
+        "500",
+        "--auth-id",
+        "9",
+      ],
+      "gmvmax.campaigns.budget",
+    ],
+    [
+      [
+        "gmvmax",
+        "campaigns",
+        "roas",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+        "--value",
+        "2.5",
+        "--auth-id",
+        "9",
+      ],
+      "gmvmax.campaigns.roas",
+    ],
+    [
+      ["rules", "options", "--rule-type", "ads", "--scope", "campaign"],
+      "rules.options",
+    ],
+    [["rules", "list"], "rules.list"],
+    [["rules", "get", "--rule-id", "42"], "rules.get"],
+    [["rules", "create", "--file", "rule.json"], "rules.create"],
+    [
+      ["rules", "update", "--rule-id", "42", "--file", "patch.json"],
+      "rules.update",
+    ],
+    [["rules", "enable", "--rule-id", "42"], "rules.enable"],
+    [["rules", "disable", "--rule-id", "42"], "rules.disable"],
+    [["rules", "delete", "--rule-id", "42"], "rules.delete"],
+    [
+      ["rules", "dryrun", "--rule-id", "42", "--adv-id", "70001"],
+      "rules.dryrun",
+    ],
+    [
+      ["rules", "executions", "list", "--rule-id", "42"],
+      "rules.executions.list",
+    ],
+    [
+      ["rules", "executions", "get", "--execution-id", "99"],
+      "rules.executions.get",
+    ],
   ] as const)("解析命令 %j", (argv, kind) => {
     expect(parseArguments(argv).command?.kind).toBe(kind)
   })
@@ -203,6 +300,108 @@ describe("parseArguments", () => {
     })
   })
 
+  it("解析 rules executions list 的 page-size 原始值", () => {
+    expect(
+      parseArguments([
+        "rules",
+        "executions",
+        "list",
+        "--rule-id",
+        "42",
+        "--page",
+        "3",
+        "--page-size",
+        "50",
+      ]).command
+    ).toEqual({
+      kind: "rules.executions.list",
+      ruleId: "42",
+      scopeId: undefined,
+      result: undefined,
+      from: undefined,
+      to: undefined,
+      page: "3",
+      pageSize: "50",
+    })
+  })
+
+  it("解析 GMV Max 读取参数和成对的 dryrun GMV 上下文", () => {
+    expect(
+      parseArguments([
+        "gmvmax",
+        "campaigns",
+        "list",
+        "--adv-id",
+        "70001",
+        "--store-id",
+        "shop-1",
+        "--promotion-type",
+        "product",
+        "--from",
+        "2026-08-01",
+        "--to",
+        "2026-08-07",
+        "--include-trend",
+        "--auth-id",
+        "9",
+      ]).command
+    ).toEqual({
+      kind: "gmvmax.campaigns.list",
+      advId: "70001",
+      storeId: "shop-1",
+      promotionType: "product",
+      from: "2026-08-01",
+      to: "2026-08-07",
+      includeTrend: true,
+      authId: "9",
+    })
+    expect(
+      parseArguments([
+        "rules",
+        "dryrun",
+        "--rule-id",
+        "43",
+        "--adv-id",
+        "70001",
+        "--shop-id",
+        "shop-1",
+        "--campaign-id",
+        "80001",
+      ]).command
+    ).toEqual({
+      kind: "rules.dryrun",
+      ruleId: "43",
+      advId: "70001",
+      shopId: "shop-1",
+      campaignId: "80001",
+    })
+  })
+
+  it("解析 Rule 写命令的文件/stdin 输入和全局 Key", () => {
+    expect(
+      parseArguments([
+        "rules",
+        "create",
+        "--stdin",
+        "--idempotency-key",
+        "explicit_rule_key",
+      ])
+    ).toMatchObject({
+      global: { idempotencyKey: "explicit_rule_key" },
+      command: { kind: "rules.create", file: undefined, stdin: true },
+    })
+    expect(
+      parseArguments([
+        "rules",
+        "update",
+        "--rule-id",
+        "42",
+        "--file",
+        "patch.json",
+      ]).command
+    ).toEqual({ kind: "rules.update", ruleId: "42", file: "patch.json" })
+  })
+
   it("解析 Status 与 Command selector，保留原始字符串", () => {
     expect(
       parseArguments([
@@ -276,14 +475,7 @@ describe("parseArguments", () => {
       ["feedback", "--message", "missing category"],
       ["feedback", "--category", "future", "--message", "text"],
       ["feedback", "--category", "bug"],
-      [
-        "feedback",
-        "--category",
-        "bug",
-        "--message",
-        "text",
-        "--message-stdin",
-      ],
+      ["feedback", "--category", "bug", "--message", "text", "--message-stdin"],
       ["feedback", "extra", "--category", "bug", "--message", "text"],
     ]) {
       expectUsageFailure(argv)
@@ -336,6 +528,150 @@ describe("parseArguments", () => {
       ["commands", "get", "extra", "--help"],
       ["commands", "pending", "--set", "enable"],
       ["commands", "pending", "--test"],
+      // budget 必填参数拒绝
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+        "--value",
+        "300",
+      ],
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--mode",
+        "set",
+        "--value",
+        "300",
+      ],
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--value",
+        "300",
+      ],
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+      ],
+      [
+        "ads",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "invalid",
+        "--value",
+        "300",
+      ],
+      // rules 必填参数拒绝
+      ["rules", "options"],
+      ["rules", "options", "--rule-type", "ads"],
+      ["rules", "options", "--rule-type", "invalid", "--scope", "campaign"],
+      ["rules", "get"],
+      ["rules", "create"],
+      ["rules", "create", "--file", "rule.json", "--stdin"],
+      ["rules", "update", "--rule-id", "42"],
+      ["rules", "update", "--file", "patch.json"],
+      ["rules", "update", "--rule-id", "42", "--stdin"],
+      ["rules", "enable"],
+      ["rules", "disable"],
+      ["rules", "delete"],
+      ["rules", "dryrun", "--rule-id", "42"],
+      ["rules", "dryrun", "--adv-id", "70001"],
+      [
+        "rules",
+        "dryrun",
+        "--rule-id",
+        "42",
+        "--adv-id",
+        "70001",
+        "--shop-id",
+        "shop-1",
+      ],
+      [
+        "rules",
+        "dryrun",
+        "--rule-id",
+        "42",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+      ],
+      [
+        "rules",
+        "dryrun",
+        "--rule-id",
+        "42",
+        "--adv-id",
+        "70001",
+        "--idempotency-key",
+        "not_allowed",
+      ],
+      ["rules", "executions", "list"],
+      ["rules", "executions", "get"],
+      [
+        "gmvmax",
+        "campaigns",
+        "status",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--set",
+        "enable",
+      ],
+      [
+        "gmvmax",
+        "campaigns",
+        "budget",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "set",
+        "--value",
+        "500",
+      ],
+      [
+        "gmvmax",
+        "campaigns",
+        "roas",
+        "--adv-id",
+        "70001",
+        "--campaign-id",
+        "80001",
+        "--mode",
+        "future",
+        "--value",
+        "2.5",
+        "--auth-id",
+        "9",
+      ],
     ]) {
       expectUsageFailure(argv)
     }
@@ -359,6 +695,52 @@ describe("parseArguments", () => {
     expect(parseArguments(["feedback", "--help"])).toMatchObject({
       help: true,
       helpTopic: "feedback",
+    })
+    expect(
+      parseArguments(["ads", "campaigns", "budget", "--help"])
+    ).toMatchObject({
+      help: true,
+      helpTopic: "ads campaigns budget",
+    })
+    expect(parseArguments(["rules", "options", "--help"])).toMatchObject({
+      help: true,
+      helpTopic: "rules options",
+    })
+    expect(parseArguments(["rules", "get", "--help"])).toMatchObject({
+      help: true,
+      helpTopic: "rules get",
+    })
+    for (const topic of [
+      "create",
+      "update",
+      "enable",
+      "disable",
+      "delete",
+      "dryrun",
+    ] as const) {
+      expect(parseArguments(["rules", topic, "--help"])).toMatchObject({
+        help: true,
+        helpTopic: `rules ${topic}`,
+      })
+    }
+    expectUsageFailure([
+      "rules",
+      "dryrun",
+      "--idempotency-key",
+      "not_allowed_even_for_help",
+      "--help",
+    ])
+    expect(
+      parseArguments(["rules", "executions", "list", "--help"])
+    ).toMatchObject({
+      help: true,
+      helpTopic: "rules executions list",
+    })
+    expect(
+      parseArguments(["rules", "executions", "get", "--help"])
+    ).toMatchObject({
+      help: true,
+      helpTopic: "rules executions get",
     })
     expectUsageFailure([
       "commands",
@@ -435,10 +817,79 @@ describe("parseArguments", () => {
     })
     expectUsageFailure(["capabilities", "--version"])
   })
+
+  it("Copy 只注册四条命令，裸 tasks 与 get 在 maximum=4 下共存", () => {
+    expect(
+      parseArguments(["ads", "copy", "submit", "--file", "copy.json"])
+    ).toMatchObject({
+      command: { kind: "ads.copy.submit", file: "copy.json" },
+    })
+    expect(
+      parseArguments(["ads", "copy", "preview", "--file", "copy.json"])
+    ).toMatchObject({
+      command: { kind: "ads.copy.preview", file: "copy.json" },
+    })
+    expect(
+      parseArguments([
+        "ads",
+        "copy",
+        "tasks",
+        "--status",
+        "partial",
+        "--page",
+        "2",
+        "--page-size",
+        "50",
+      ])
+    ).toMatchObject({
+      command: {
+        kind: "ads.copy.tasks.list",
+        status: "partial",
+        page: "2",
+        pageSize: "50",
+      },
+    })
+    expect(
+      parseArguments(["ads", "copy", "tasks", "get", "--task-id", "42"])
+    ).toMatchObject({ command: { kind: "ads.copy.tasks.get", taskId: "42" } })
+
+    for (const argv of [
+      ["ads", "copy", "submit"],
+      ["ads", "copy", "preview"],
+      ["ads", "copy", "tasks", "get"],
+      ["ads", "copy", "tasks", "foo"],
+      ["ads", "copy", "tasks", "list"],
+      ["ads", "copy", "tasks", "get", "extra"],
+      ["ads", "copy", "submit", "--file", "copy.json", "--wait"],
+      ["ads", "copy", "preview", "--stdin"],
+      [
+        "ads",
+        "copy",
+        "preview",
+        "--file",
+        "copy.json",
+        "--idempotency-key",
+        "must-not-exist",
+      ],
+    ]) {
+      expectUsageFailure(argv)
+    }
+
+    expect(parseArguments(["ads", "copy", "submit", "--help"])).toMatchObject({
+      help: true,
+      command: { kind: "ads.copy.submit" },
+    })
+    expect(
+      parseArguments(["ads", "copy", "tasks", "get", "--help"])
+    ).toMatchObject({
+      help: true,
+      command: { kind: "ads.copy.tasks.get" },
+    })
+  })
 })
 
 describe("helpText", () => {
-  it("全局帮助冻结命令面、公共 flags、退出码和 M0 边界", () => {
+  it("全局帮助冻结命令面、公共 flags、退出码和 CLI 边界", () => {
     const help = helpText("")
     for (const command of [
       "auth login",
@@ -452,6 +903,28 @@ describe("helpText", () => {
       "ads campaigns get",
       "ads campaigns status",
       "ads report campaigns",
+      "ads campaigns budget",
+      "ads copy submit",
+      "ads copy preview",
+      "ads copy tasks",
+      "ads copy tasks get",
+      "gmvmax stores",
+      "gmvmax campaigns list",
+      "gmvmax campaigns get",
+      "gmvmax campaigns status",
+      "gmvmax campaigns budget",
+      "gmvmax campaigns roas",
+      "rules options",
+      "rules list",
+      "rules get",
+      "rules create",
+      "rules update",
+      "rules enable",
+      "rules disable",
+      "rules delete",
+      "rules dryrun",
+      "rules executions list",
+      "rules executions get",
       "commands get",
       "commands pending",
       "commands resume",
@@ -475,6 +948,10 @@ describe("helpText", () => {
     expect(help).not.toContain("--token")
     expect(help).toContain("npm install -g @adrate/cli")
     expect(help).toContain("adrate skills install")
+    expect(help).toContain("Evaluate one rule without actions")
+    expect(help).not.toContain("Evaluate one Ads rule without actions")
+    expect(help).toContain("Create one disabled automation rule")
+    expect(help).not.toContain("Create one disabled Ads rule")
   })
 
   it.each([
@@ -489,6 +966,28 @@ describe("helpText", () => {
     ["ads campaigns get", "--campaign-id <id>"],
     ["ads campaigns status", "--set enable|disable"],
     ["ads report campaigns", "--start-date <YYYY-MM-DD>"],
+    ["ads campaigns budget", "--mode <mode>"],
+    ["ads copy submit", "accepted"],
+    ["ads copy preview", "without an idempotency key"],
+    ["ads copy tasks", "does not follow pagination"],
+    ["ads copy tasks get", "Partial is a terminal"],
+    ["gmvmax stores", "--adv-id <id>"],
+    ["gmvmax campaigns list", "--promotion-type product|live"],
+    ["gmvmax campaigns get", "--store-id <id>"],
+    ["gmvmax campaigns status", "--auth-id <id>"],
+    ["gmvmax campaigns budget", "at most 2 decimal places"],
+    ["gmvmax campaigns roas", "at most 1 decimal place"],
+    ["rules options", "--rule-type"],
+    ["rules list", "--rule-type"],
+    ["rules get", "--rule-id <id>"],
+    ["rules create", "--file <rule.json> | --stdin"],
+    ["rules update", "--file <patch.json>"],
+    ["rules enable", "bodyless POST"],
+    ["rules disable", "bodyless POST"],
+    ["rules delete", "bodyless POST"],
+    ["rules dryrun", "no Idempotency-Key"],
+    ["rules executions list", "--page-size <1..100>"],
+    ["rules executions get", "--execution-id <id>"],
     ["commands get", "--command-id <uuid>"],
     ["commands pending", "protected local pending-command directory"],
     ["commands resume", "only when the server proves no Command exists"],
@@ -499,7 +998,7 @@ describe("helpText", () => {
     expect(help).toContain(expected)
     expect(help).toContain("Shared exit codes:")
     expect(help).toContain("5 an irreversible or one-time remote outcome")
-    expect(help).toContain("M0 boundary:")
+    expect(help).toContain("CLI capability boundary:")
     expect(help).toContain("No team switching")
     expect(help).toContain("npm install -g @adrate/cli")
     expect(help).toContain("adrate skills install")
@@ -510,6 +1009,7 @@ describe("helpText", () => {
     "ads campaigns get",
     "ads campaigns status",
     "ads report campaigns",
+    "ads campaigns budget",
   ])("%s 明确多授权缺 authId 的改请求语义", (topic) => {
     const help = helpText(topic)
     expect(help).toContain("--auth-id")
@@ -519,22 +1019,15 @@ describe("helpText", () => {
     expect(help).toMatch(/never\s+chooses|never choose/)
   })
 
-  it("Status 帮助冻结单目标、零自动重试与 M0 非目标", () => {
+  it("Status 帮助不再声称 Copy 或任意批量写不受支持", () => {
     const help = helpText("ads campaigns status")
     expect(help).toContain("never retries the POST automatically")
-    for (const unsupported of [
-      "batch",
-      "budget",
-      "bid",
-      "create",
-      "Adgroup",
-      "Ad",
-      "rules",
-      "copy",
-      "GMV Max",
-    ]) {
-      expect(help).toContain(unsupported)
-    }
+    expect(help).toContain("one Campaign status only")
+    expect(help).toContain("Campaign Copy is available under")
+    expect(help).not.toContain("no batch")
+    expect(help).not.toContain("no batch writes")
+    expect(help).not.toContain("budget")
+    expect(help).not.toContain("rules")
   })
 
   it("反馈帮助冻结隐私边界、自动元数据与服务端清洗局限", () => {

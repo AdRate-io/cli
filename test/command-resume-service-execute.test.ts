@@ -11,6 +11,7 @@ import {
   CREDENTIAL_ID,
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
+  statusIntent,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -234,12 +235,8 @@ async function seed(input: SeedInput = {}) {
     credentialId: CREDENTIAL_ID,
     issuerOrigin: "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
-      campaignId: "80001",
-      desiredStatus: "ENABLE",
-      authId: input.authId ?? null,
-    },
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent({ authId: input.authId ?? null }),
     now: new Date(input.createdAt ?? CREATED_AT),
   })
   if (created.kind !== "created") throw new Error("Expected created record")
@@ -260,6 +257,82 @@ async function seed(input: SeedInput = {}) {
     await repository.replaceExact(created.record, next)
   }
   return next
+}
+
+type GmvMaxWriteCapability =
+  | "gmvmax.campaign.status.write"
+  | "gmvmax.campaign.budget.write"
+  | "gmvmax.campaign.roas.write"
+
+interface GmvMaxResumeCase {
+  label: string
+  capabilityId: GmvMaxWriteCapability
+  operation: "status" | "budget" | "roas"
+  familyPayload: Record<string, unknown>
+  body: Record<string, unknown>
+  target: Record<string, unknown>
+}
+
+const GMV_MAX_RESUME_CASES: ReadonlyArray<GmvMaxResumeCase> = [
+  {
+    label: "status",
+    capabilityId: "gmvmax.campaign.status.write",
+    operation: "status",
+    familyPayload: { desiredStatus: "DISABLE" },
+    body: { status: "DISABLE", authId: 9 },
+    target: { desiredStatus: "DISABLE" },
+  },
+  {
+    label: "budget",
+    capabilityId: "gmvmax.campaign.budget.write",
+    operation: "budget",
+    familyPayload: { mode: "increase_amount", value: 25.5 },
+    body: { mode: "increase_amount", value: 25.5, authId: 9 },
+    target: { mode: "increase_amount", value: 25.5 },
+  },
+  {
+    label: "ROAS",
+    capabilityId: "gmvmax.campaign.roas.write",
+    operation: "roas",
+    familyPayload: { mode: "set", value: 2.5 },
+    body: { mode: "set", value: 2.5, authId: 9 },
+    target: { mode: "set", value: 2.5 },
+  },
+]
+
+async function seedGmvMax(testCase: GmvMaxResumeCase) {
+  const created = await repository.prepare({
+    idempotencyKey: KEY,
+    credentialId: CREDENTIAL_ID,
+    issuerOrigin: "https://api.adrate.io",
+    teamId: 42,
+    capabilityId: testCase.capabilityId,
+    intent: {
+      capabilityId: testCase.capabilityId,
+      advId: "70001",
+      campaignId: "80001",
+      authId: 9,
+      familyPayload: testCase.familyPayload,
+    },
+    now: new Date(CREATED_AT),
+  })
+  if (created.kind !== "created") throw new Error("Expected created record")
+  await repository.replaceExact(created.record, {
+    ...created.record,
+    localState: "response_unknown",
+  })
+}
+
+function gmvMaxCommand(testCase: GmvMaxResumeCase) {
+  return {
+    ...command({ status: "pending" }),
+    capabilityId: testCase.capabilityId,
+    target: {
+      advertiserId: "70001",
+      campaignId: "80001",
+      ...testCase.target,
+    },
+  }
 }
 
 function serviceFor(
@@ -321,6 +394,36 @@ afterEach(async () => {
 })
 
 describe("CommandResumeService.resume", () => {
+  it.each(GMV_MAX_RESUME_CASES)(
+    "GMV Max $label response_unknown 的 404 恢复只用原 Key 和原 payload 重发一次",
+    async (testCase) => {
+      await seedGmvMax(testCase)
+      const transport = new SequenceTransport([
+        errorResponse({
+          code: "RESOURCE_NOT_FOUND",
+          requestId: "gmv_get_missing",
+        }),
+        successResponse(gmvMaxCommand(testCase), 202, "gmv_post_pending"),
+      ])
+      const { service } = serviceFor(transport)
+
+      const outcome = await service.resume({ idempotencyKey: KEY })
+
+      expect(outcome.exitCode).toBe(4)
+      expect(transport.requests).toHaveLength(2)
+      expect(transport.requests[1]).toMatchObject({
+        method: "POST",
+        path: `/public/v1/gmvmax/advertisers/70001/campaigns/80001/${testCase.operation}`,
+        idempotencyKey: KEY,
+        json: testCase.body,
+      })
+      expect(await repository.read(KEY)).toMatchObject({
+        kind: "found",
+        record: { localState: "command_known", commandId: COMMAND_ID },
+      })
+    }
+  )
+
   it("queries by Key, propagates requestId, and omits a null authId from the one POST", async () => {
     await seed()
     const transport = new SequenceTransport([

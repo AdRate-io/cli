@@ -10,6 +10,7 @@ import {
   OWNER_SESSION_TOKEN,
   createTemporaryStateFixture,
   deferred,
+  statusIntent,
   validCredentialMetadata,
   validTokenIndex,
 } from "./helpers.js"
@@ -307,12 +308,12 @@ async function seed(
     credentialId: input.credentialId ?? CREDENTIAL_ID,
     issuerOrigin: input.issuerOrigin ?? "https://api.adrate.io",
     teamId: 42,
-    intent: {
-      advId: "70001",
+    capabilityId: "ads.campaign.status.write",
+    intent: statusIntent({
       campaignId: input.campaignId ?? "80001",
       desiredStatus: input.desiredStatus ?? "ENABLE",
       authId: 42,
-    },
+    }),
     now: NOW,
   })
   if (result.kind !== "created") throw new Error("seed failed")
@@ -437,7 +438,7 @@ describe("StatusCommandService input and HTTP boundary", () => {
       expect(harness.transport.requests[0]?.json).not.toHaveProperty("authId")
       expect(await readRecord(harness.repository, generated)).toMatchObject({
         idempotencyKey: generated,
-        intent: { authId: null },
+        intent: statusIntent({ authId: null }),
       })
     } finally {
       await harness.fixture.cleanup()
