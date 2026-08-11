@@ -2,10 +2,10 @@
   "formatVersion": 1,
   "name": "adrate-shared",
   "description": "Operate AdRate CLI authentication, explicit feedback, Command recovery, receipt-backed write replay, pagination, rate limits, and ownership boundaries safely. Use whenever an Agent invokes AdRate or interprets its results.",
-  "version": "1.4.0",
-  "minCliVersion": "0.1.0-beta.8",
+  "version": "1.5.0",
+  "minCliVersion": "0.1.0-beta.9",
   "requiredBin": "adrate",
   "cliHelp": "adrate skills read adrate-shared",
-  "shellSha256": "41b0e10c972ea35368bab04c15b83baf019bbcd6ce9994b50e4edcfce53467d4",
+  "shellSha256": "74e6141de1d5beeaeedc077c3ada7e29ad1c312f8133f010ed856c5241bf0d1c",
   "contentSha256": "015566e4b13353f98f33a8ffd421e98af0c0659d1cc6e894fbb137ba0380a468"
 }

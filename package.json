@@ -1,6 +1,6 @@
 {
   "name": "@adrate/cli",
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.9",
   "description": "Official AdRate command-line client",
   "repository": {
     "type": "git",
@@ -38,6 +38,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "skills:reseal": "node ./scripts/reseal-skill-assets.mjs",
+    "release:bump": "node ./scripts/bump-version.mjs",
     "release:gate": "node ./scripts/release-gate.mjs --local --require-clean",
     "mirror": "node ./scripts/public-mirror.mjs",
     "smoke": "node ./dist/bin.js --version && node ./dist/bin.js --help",

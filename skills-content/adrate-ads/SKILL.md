@@ -123,6 +123,8 @@ Query available metrics, actions, and constraints for a given rule type and scop
 adrate rules options --rule-type ads --scope campaign --json
 ```
 
+The response is self-sufficient and machine-readable. `requestTemplate.body` is a structurally valid minimal create body for that exact rule type and scope, but it still carries placeholders: replace every `requestTemplate.placeholders` entry with a real value before submitting, or the server rejects the request. Build every new rule from it instead of copying an existing rule; a team with no rules yet needs no `rules get` call at all.
+
 List rules with optional filters:
 
 ```sh
@@ -155,11 +157,108 @@ Rule writes support Ads, GMV Max product promotion, and GMV Max live promotion. 
 
 Before creating a GMV Max rule or changing its targets, run `gmvmax stores` and `gmvmax campaigns list`; use `gmvmax campaigns get` only when current Campaign details are needed. Then query `rules options` with the exact mapped rule type and intended scope. A GMV Max rule requires `authId`; every target uses `targetType: "campaign"` with `advId` and `shopId`. Include `campaignId` for a Campaign-bound target, or omit it for a full-store target. Do not send timezone in the effective window or targets: the server derives it from account data. GMV Max Rule budget action values accept at most two decimal places and ROAS action values at most one; values must be positive and percentage decreases must be below 100.
 
+### Build the rule body
+
+Start from `requestTemplate.body`, replace every entry listed in `requestTemplate.placeholders` with a real value, then adjust the metrics, operators, values, and actions to the requested intent. Never submit a body that still contains a placeholder such as `<advertiser-id>` or `<store-id>`, and never invent a field: any key outside the template contract is rejected with `UNKNOWN_FIELD`.
+
+`requestTemplate.fields` states each top-level field as `required`, `optional`, or `forbidden` for the queried rule type. Read it per rule type instead of reusing one body across families, because the two families are deliberately asymmetric: for Ads, `authId` is forbidden and the server resolves the authorization itself, while `targets`, `labelIds`, and `targetStatuses` are optional; for GMV Max, `authId` and `targets` are required, and `labelIds` and `targetStatuses` are forbidden. An Ads rule with neither `targets` nor `labelIds` is still created but cannot be enabled.
+
+A complete Ads example with one pipeline, mixed AND/OR conditions, and one relative budget action:
+
+```json
+{
+  "ruleType": "ads",
+  "scope": "campaign",
+  "name": "Cut spend on weak campaigns",
+  "triggerMode": "repeat",
+  "checkIntervalMinutes": 30,
+  "targetStatuses": ["STATUS_DELIVERY_OK"],
+  "effectiveWindow": { "start": "09:00", "end": "21:00", "timezone": "America/Los_Angeles" },
+  "targets": [{ "targetType": "ad_account", "advId": "70001" }],
+  "pipelines": [
+    {
+      "name": "High spend, weak return",
+      "conditions": {
+        "all": [
+          { "metric": "spend", "operator": "greater", "value": 200, "timeWindow": { "granularity": "day", "fromDaysAgo": 0, "toDaysAgo": 0 } },
+          {
+            "any": [
+              { "metric": "complete_payment_roas", "operator": "less", "value": 1.5, "timeWindow": { "granularity": "day", "fromDaysAgo": 6, "toDaysAgo": 0 } },
+              { "metric": "cpa", "operator": "greater", "value": 30, "timeWindow": { "granularity": "lifetime" } }
+            ]
+          },
+          { "metric": "campaign_name", "operator": "like", "value": "US-" }
+        ]
+      },
+      "actions": [{ "kind": "basic", "type": "budget:dec:%", "value": "20" }]
+    }
+  ]
+}
+```
+
+The same shape for GMV Max product promotion, with the required `authId`, one Campaign-bound target, and a Session action. Both bodies are syntactically valid samples rather than recommendations, and a rule body file must be plain JSON without comments:
+
+```json
+{
+  "ruleType": "gmv_max_product",
+  "scope": "product",
+  "name": "Boost profitable products",
+  "authId": 42,
+  "checkIntervalMinutes": 60,
+  "effectiveWindow": { "start": "08:00", "end": "23:00" },
+  "targets": [
+    { "targetType": "campaign", "advId": "70001", "shopId": "shop-1", "campaignId": "80001" }
+  ],
+  "pipelines": [
+    {
+      "name": "Profitable products",
+      "conditions": {
+        "all": [
+          { "metric": "roi", "operator": "greater_or_equal", "value": 2, "timeWindow": { "granularity": "hour", "lookbackHours": 3 } },
+          { "metric": "orders", "operator": "greater", "value": 5, "timeWindow": { "granularity": "day", "fromDaysAgo": 0, "toDaysAgo": 0 } }
+        ]
+      },
+      "actions": [
+        {
+          "kind": "session",
+          "type": "product_session:create_no_bid",
+          "params": { "budget": 50, "scheduleType": "SCHEDULE_START_END", "durationValue": 2, "durationUnit": "hours" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Condition and action syntax:
+
+- A condition group carries exactly one of `all` (AND) or `any` (OR), whose value is a non-empty array of child nodes; no other key may sit beside it. Groups nest, and exceeding the accepted depth returns `CONDITION_TREE_TOO_DEEP`. A single leaf may also stand alone as `conditions`.
+- A leaf is `{ metric, operator, value, timeWindow? }`. Take `metric` from `metrics[]` and `operator` from that metric's own `operators` list, never from the shared `operators` map, which only groups operators by metric family.
+- The `value` type follows the metric type: a number or numeric string for `numeric`, `attribute`, and `time` metrics; a non-empty string for `text`; one of the metric's `enumValues` for `enum`; and a comma-separated id string for the `in` and `not_in` operators.
+- Send `timeWindow` for every metric whose `timeWindowRequired` is true; omitting it returns `REQUIRED`.
+- An action is `{ kind: "basic", type, value? }`, or `{ kind: "session", type, params }` when that action's `needsSessionParams` is true; `kind` must match the action exactly. Include `value` only when `needsValue` is true, and send it as a decimal string, not a number. Session `params` follow the action's own `sessionParamsSchema`.
+
+Time window syntax, one shape per granularity:
+
+- `{ "granularity": "day", "fromDaysAgo": N, "toDaysAgo": M }` is an inclusive whole-day window. `fromDaysAgo` is the older bound and must be greater than or equal to `toDaysAgo`; `0` means today.
+- `{ "granularity": "hour", "lookbackHours": N }` covers the trailing N hours.
+- `{ "granularity": "lifetime" }` carries no other key.
+
+Supported granularity depends on both rule type and scope. `constraints.timeWindow` in the same `rules options` response is the machine-readable source of truth for the granularity set and its numeric bounds:
+
+| Rule type and scope | Granularities | Numeric bounds |
+| --- | --- | --- |
+| Ads campaign, adgroup, ad | `day`, `lifetime` | day 0 to 90 |
+| GMV Max campaign, product, live_room | `day`, `hour` | day 0 to 30, hour 1 to 24 |
+| GMV Max creative | `day` | day 0 to 30 |
+
+Ads rejects every `hour` window and GMV Max rejects every `lifetime` window with `UNSUPPORTED_TIME_WINDOW`. Some Ads metrics reject `lifetime` individually, marked by `supportsLifetime: false` on the metric. `timeWindowPresets` lists ready-made windows already filtered for the queried scope; a custom window is accepted whenever it satisfies `constraints.timeWindow`.
+
 ### Create, review, and enable
 
 Follow this order for every new rule:
 
-1. Discover the target and query its exact rule type and scope with `rules options`.
+1. Discover the target, query its exact rule type and scope with `rules options`, and build the body from `requestTemplate` as described above.
 2. Create one rule. Creation always returns `enabled=false`.
 3. Dry-run the disabled rule against one bound Campaign and show the Owner the returned targets, hits, and evaluation evidence.
 4. Enable only after the Owner explicitly confirms the shown result.
@@ -184,7 +283,7 @@ Dry run has no idempotency key because it does not mutate a rule. If it returns 
 
 ### Update or delete
 
-Before updating, read the current rule, query `rules options` for its exact scope, and apply only the requested patch. Do not change its enabled state unless the Owner asked for that change. A disabled rule may be dry-run after the update; enabling it still requires explicit confirmation.
+Before updating, read the current rule, query `rules options` for its exact scope, and apply only the requested patch. An update body is a top-level patch over the same fields as create except `ruleType`: each supplied field replaces the stored value outright, each omitted field is left untouched, and an empty patch is rejected. There is no deep merge, so a `pipelines` patch must carry the complete pipeline array. Take current values from `rules get` and legal shapes from `rules options`. Do not change its enabled state unless the Owner asked for that change. A disabled rule may be dry-run after the update; enabling it still requires explicit confirmation.
 
 ```sh
 adrate rules get --rule-id 42 --json
