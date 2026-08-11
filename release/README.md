@@ -15,6 +15,22 @@
 
 tarball 文件清单只有 `scripts/release-gate.mjs` 中的 `EXPECTED_TARBALL_FILES` 一个机器真源。workflow、README 和 release notes 不复制清单。
 
+## 0. 版本号一键更新
+
+版本引用按"什么时候才需要动"分三层，全部由 `pnpm release:bump` 统一修改（在 `cli/` 目录执行）：
+
+```bash
+pnpm release:bump <新CLI版本>                        # 层 1：仅 package.json（Skill 未变的发布只需这一层）
+pnpm release:bump <新CLI版本> --skill <新Skill版本>   # 层 1+2：Skill 正文有变更时（壳 frontmatter、minCliVersion、
+                                                     #         测试字面量，并自动 reseal + validate）
+pnpm release:bump <新CLI版本> --accio                # 层 1+3：需要推给 Accio 平台时（clis.json / connectors.json pin）
+```
+
+- 层 2 的测试版本字面量是守门设计（版本 bump 必须留下可见 diff），脚本改完后照常由测试验证一致性，任何一处预期替换数为 0 会直接失败退出。
+- Skill 正文变更的判定：`cli/skills-content/` 有 diff 即算，Skill 版本按语义化递增（内容新增 minor、修错字 patch）。
+- `--accio` 改的 pin 指向 npm 包，发布成功前 pin 是悬空的；只在本次发布确定要同步 Accio 平台时携带。
+- 改完运行 `npx vitest run`（cli/）与仓库根目录 `pnpm accio:check` 验证。
+
 ## 1. 在私有源完成候选提交
 
 先把版本、代码、测试、Skills 和发布配置提交到私有仓库，确认工作区干净。候选 commit 必须是准备镜像和发布的完整状态，不能在镜像后继续手改公开仓库。

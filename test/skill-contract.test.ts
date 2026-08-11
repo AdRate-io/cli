@@ -75,7 +75,7 @@ describe("Agent Skill publication contracts", () => {
       expect(manifest).not.toBeNull()
       expect(normalizeSkillText(shell)).toBe(shell)
       expect(normalizeSkillText(content)).toBe(content)
-      expect(manifest?.version).toBe("1.4.0")
+      expect(manifest?.version).toBe("1.5.0")
       expect(manifest?.minCliVersion).toBe(BUNDLED_SKILL_MIN_CLI_VERSION)
       expect(manifest?.shellSha256).toBe(sha256SkillText(shell))
       expect(manifest?.contentSha256).toBe(sha256SkillText(content))
@@ -124,7 +124,7 @@ describe("Agent Skill publication contracts", () => {
     ]) {
       expect(
         parseSkillFrontmatter(
-          shell.replace('version: "1.4.0"', `version: ${replacement}`)
+          shell.replace('version: "1.5.0"', `version: ${replacement}`)
         )
       ).toBeNull()
     }
