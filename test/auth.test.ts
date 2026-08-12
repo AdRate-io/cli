@@ -926,7 +926,10 @@ describe("Device Authorization", () => {
     })
   })
 
-  it("restarts from a poll staging record left by a stopped process", async () => {
+  it("resumes the same Device generation from poll staging left by a killed process", async () => {
+    // 场景：上个进程被强杀于 poll 中（pollAttempt 残留），用户已在浏览器
+    // 完成授权。重新 login 必须复用同代 Device 立即取回 Token，而不是
+    // 丢弃已批准的授权重新发码。
     const harness = await createHarness()
     await issue(harness)
     const previousDevice = (await harness.state.readDeviceState())!
@@ -936,24 +939,57 @@ describe("Device Authorization", () => {
       storageKind: "keychain",
     })
 
-    enqueueDeviceCode(harness)
+    harness.now.value += 5_000
+    enqueueToken(harness)
+    enqueueMe(harness)
+    const deviceLines: Array<string> = []
     await expect(
-      harness.auth.login({
-        global: GLOBAL,
-        noWait: true,
-        resume: false,
-        deviceName: "restarted-device",
-      })
+      harness.auth.login(
+        {
+          global: GLOBAL,
+          noWait: false,
+          resume: false,
+          device: true,
+        },
+        (line) => deviceLines.push(line)
+      )
     ).resolves.toMatchObject({ exitCode: 0 })
 
-    expect(await harness.state.readDevicePollAttempt()).toBeNull()
-    expect(await harness.state.readDeviceState()).toMatchObject({
-      localState: "issued",
-      deviceName: "restarted-device",
+    expect(deviceLines).toHaveLength(1)
+    expect(JSON.parse(deviceLines[0]!)).toMatchObject({
+      userCode: "ABCD-EFGH",
     })
-    expect((await harness.state.readDeviceState())?.generation).not.toBe(
-      previousDevice.generation
+    expect(await harness.state.readDevicePollAttempt()).toBeNull()
+    expect(await harness.state.readTokenIndex()).toMatchObject({
+      state: "stored",
+      deviceGeneration: previousDevice.generation,
+    })
+    expect(
+      harness.transport.requests.filter(
+        (request) => request.path === "/oauth/device/code"
+      )
+    ).toHaveLength(1)
+  })
+
+  it("discards expired poll staging during login normalization", async () => {
+    const harness = await createHarness()
+    await issue(harness)
+    const previousDevice = (await harness.state.readDeviceState())!
+    await harness.state.writeDevicePollAttempt({
+      formatVersion: 1,
+      deviceGeneration: previousDevice.generation,
+      storageKind: "keychain",
+    })
+
+    harness.now.value += 601_000
+    const coordinator = new DevicePollCoordinator(
+      harness.local,
+      () => new Date(harness.now.value)
     )
+    await coordinator.normalizeForLogin()
+
+    expect(await harness.state.readDeviceState()).toBeNull()
+    expect(await harness.state.readDevicePollAttempt()).toBeNull()
   })
 
   it("falls back only after a failed Keychain readiness probe is fully cleaned", async () => {

@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "880cac2d6561aa98cddb8c3b35b2dba836961d5d",
-  "baseTargetCommit": "47bac1c05faacbed5e0dace29ac919a56a4da053",
+  "sourceCommit": "6b76cac1e0b4ab667328563f4fc1800b32ecc733",
+  "baseTargetCommit": "c3a59d1e06fef8d0d665bec285a37b2c3a437ba5",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -25,7 +25,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "8421944152fab11a7f07243baa14e92cd68a056278bac18ad106ab5cbfb5eb0f"
+      "sha256": "22a0c81e1ada1343a7e15fb325e0d33864de732ee82f721cc2c23c7c62692055"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -97,7 +97,7 @@
     },
     {
       "path": "skills-content/adrate-ads/SKILL.md",
-      "sha256": "27057d182ca2b597af9109ef36ef235ec25f6ff60df1373b805e6815cbbb2dee"
+      "sha256": "72be02f7edc4140769d7ceef98a3afa2c0fe4b8db3b15e18e7da6b831cd8e5f0"
     },
     {
       "path": "skills-content/adrate-shared/SKILL.md",
@@ -109,7 +109,7 @@
     },
     {
       "path": "skills/adrate-ads/skill-manifest.json",
-      "sha256": "effa373508957b38182d878b18021d5ebabae9b6019f1a6e3e40d370884779ee"
+      "sha256": "7ae74725e5c1ba5465d706c4c31ef053fe6a1a5fc3599559c65659ad09a1b799"
     },
     {
       "path": "skills/adrate-ads/SKILL.md",
@@ -161,7 +161,7 @@
     },
     {
       "path": "src/auth/device-poll-coordinator.ts",
-      "sha256": "a17039034ed3758a414dda0508b5427c13337b132668822d62b8a14a352bf7ab"
+      "sha256": "3cb9692a36d95931bf7a7f9b836a52e32f682459b5034b3ee61ab482c5e82161"
     },
     {
       "path": "src/auth/device-state-contract.ts",
@@ -365,7 +365,7 @@
     },
     {
       "path": "src/storage/secure-file-lock.ts",
-      "sha256": "b52898535630bdfd2c832bf61fc0020af4cedde73b8e0d245853c79939c8baaa"
+      "sha256": "c1c88bcb52213bcf015632b3be57d4d492027eaf13c3ef9a412e58f90b78fc9d"
     },
     {
       "path": "src/storage/secure-files.ts",
@@ -397,7 +397,7 @@
     },
     {
       "path": "test/auth.test.ts",
-      "sha256": "99b9dad2474a8c13e7039d810803a757e9aa205530343336345272974f058c3d"
+      "sha256": "c4452409b371635e3bace0e088196f661663547b4a285cf7f618e420ec8c5451"
     },
     {
       "path": "test/bin-process-exit-code.test.ts",
@@ -533,7 +533,7 @@
     },
     {
       "path": "test/secure-files.test.ts",
-      "sha256": "da7dfe79ee5548985efd8b32e549bd7bfa5d7e28ceaf52ed69bffec885b365a4"
+      "sha256": "8a0b706e119dc7cba22eb80dca77a18c83de1e6471610379bc4c89784d2fff6c"
     },
     {
       "path": "test/skill-assets-validator.test.ts",
