@@ -2,6 +2,7 @@ import {
   appendFile,
   chmod,
   lstat,
+  lutimes,
   mkdir,
   open,
   readdir,
@@ -9,6 +10,7 @@ import {
   symlink,
   truncate,
   unlink,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { Buffer } from "node:buffer"
@@ -383,7 +385,7 @@ describePosix("SecureFileSystem minimal local lock", () => {
     expect(await fixture.fileSystem.exists(lock)).toBe(false)
   })
 
-  it("does not invent a stale-owner takeover protocol", async () => {
+  it("treats a fresh foreign lock as busy and leaves it in place", async () => {
     fixture = await createTemporaryStateFixture()
     const lock = fixture.paths.authLock
     await fixture.fileSystem.atomicWrite(lock, "")
@@ -397,5 +399,34 @@ describePosix("SecureFileSystem minimal local lock", () => {
     await expect(
       fixture.fileSystem.withLock(lock, () => Promise.resolve("acquired"))
     ).resolves.toBe("acquired")
+  })
+
+  it("reclaims an orphan lock left behind by a killed process", async () => {
+    fixture = await createTemporaryStateFixture()
+    const lock = fixture.paths.authLock
+    await fixture.fileSystem.atomicWrite(lock, "")
+    const orphanAge = new Date(Date.now() - 60_000)
+    await utimes(lock, orphanAge, orphanAge)
+
+    await expect(
+      fixture.fileSystem.withLock(lock, () => Promise.resolve("recovered"))
+    ).resolves.toBe("recovered")
+    expect(await fixture.fileSystem.exists(lock)).toBe(false)
+  })
+
+  it("does not reclaim a stale non-regular file at the lock path", async () => {
+    fixture = await createTemporaryStateFixture()
+    await fixture.fileSystem.ensureRoot()
+    const lock = fixture.paths.authLock
+    const decoy = join(fixture.root, "decoy")
+    await writeFile(decoy, "", { mode: 0o600 })
+    await symlink(decoy, lock)
+    const orphanAge = new Date(Date.now() - 60_000)
+    await lutimes(lock, orphanAge, orphanAge)
+
+    await expect(
+      fixture.fileSystem.withLock(lock, () => Promise.resolve("unexpected"))
+    ).rejects.toBeInstanceOf(SecureFileLockBusyError)
+    expect((await lstat(lock)).isSymbolicLink()).toBe(true)
   })
 })

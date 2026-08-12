@@ -61,8 +61,16 @@ export class DevicePollCoordinator {
   ) {}
 
   /**
-   * 上次进程留下的 poll staging 不代表可恢复的远端事务。若尚未形成凭据，
-   * 丢弃同代 Device 并从新一轮发码开始；TokenIndex 已存在时交给凭据恢复处理。
+   * 上次进程留下的 poll staging 不代表进行中的本地事务，一律清除；
+   * TokenIndex 已存在时交给凭据恢复处理。
+   *
+   * 同代 Device 若仍在有效期且未收到 Token，则保留供 login 复用继续轮询：
+   * 进程被强杀（Agent 超时、taskkill）时用户可能已在浏览器完成授权，
+   * 丢弃 Device 会作废该授权、迫使用户重新走完整流程；保留后重新 login
+   * 即可秒级取回 Token。若上个进程已收到 Token 但未落盘，服务端已将
+   * device code 置为 consumed，复用轮询会得到 expired_token 干净失败，
+   * fail-closed 不受影响。token_received（deviceCode 已消费置空）或已过期
+   * 的 Device 不可恢复，仍然丢弃并从新一轮发码开始。
    */
   async normalizeForLogin(): Promise<void> {
     await this.local.state.withAuthLock(async () => {
@@ -78,7 +86,13 @@ export class DevicePollCoordinator {
         snapshot.device &&
         pollAttemptMatchesDevice(snapshot.pollAttempt, snapshot.device)
       ) {
-        await this.local.state.clearDeviceState()
+        const resumable =
+          snapshot.device.localState !== "token_received" &&
+          this.now().getTime() <
+            new Date(snapshot.device.expiresAt).getTime()
+        if (!resumable) {
+          await this.local.state.clearDeviceState()
+        }
       }
       await this.local.state.clearDevicePollAttempt()
     })

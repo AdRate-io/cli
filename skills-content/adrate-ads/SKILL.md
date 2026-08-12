@@ -69,6 +69,8 @@ The value must be a positive number with at most two decimal places. The server 
 
 Prepare one JSON file and keep copied Campaigns disabled by default. The server defaults `options.operationStatus` to `DISABLE`; tell the Owner that the copies will be disabled. Set it to `ENABLE` only after the Owner explicitly requests that outcome.
 
+`options.cleanupStrategy` controls cleanup of partially created Campaigns when the Worker fails mid-copy. Three values: `cleanup_if_empty` (default; delete created Campaign shell only if zero Adgroups succeed), `cleanup_if_partial` (delete even with partial Adgroup success), `no_cleanup` (preserve everything). Set `cleanup_if_partial` when the Owner prefers no leftover artifacts from failures.
+
 Preview before submitting:
 
 ```sh
