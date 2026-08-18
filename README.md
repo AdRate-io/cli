@@ -37,6 +37,7 @@ adrate gmvmax campaigns status --adv-id <id> --campaign-id <id> --set enable|dis
 adrate gmvmax campaigns budget --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate gmvmax campaigns roas --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate rules options --rule-type <type> --scope <scope>
+adrate rules options --rule-type ads --scope material
 adrate rules list [--rule-type <type>] [--keyword <text>]
 adrate rules get --rule-id <id>
 adrate rules create (--file <rule.json> | --stdin)
@@ -104,9 +105,11 @@ Command-style Campaign writes persist a minimal pending record holding credentia
 
 `rules create` reads JSON from either `--file` or `--stdin`; `rules update` accepts only `--file`. The CLI validates only that the input is valid JSON with a top-level object — rule structure and field constraints are the server's to define. `enable`, `disable`, and `delete` send a POST with no body at all, not `{}`.
 
+Upgraded Smart+ creative-material rules use the server-provided Ads scope `material`. Query `adrate rules options --rule-type ads --scope material --json` before create or update instead of relying on CLI-bundled metrics, actions, or time-window lists. Create and update send the supplied JSON object unchanged, while list, get, execution detail, and JSON dry-run output preserve `material`, `materialMapping`, and future server-provided fields.
+
 Each of the five rule write commands sends at most one 15-second request, writes no pending Command ledger, and never retries automatically. Without an explicit `--idempotency-key`, the CLI generates an operation-scoped key: `rule-create-*`, `rule-update-*`, `rule-enable-*`, `rule-disable-*`, or `rule-delete-*`. On a network failure, timeout, or unconfirmable receipt, replay using the original key printed in the error and byte-identical input; for a business error the server explicitly rejected, correct the input first and then use a new key.
 
-`rules dryrun` is a standalone 60-second JSON POST with no idempotency key that evaluates a rule without executing actions. GMV Max rules pass target context through `--shop-id` and `--campaign-id`, which must be supplied together. Human output prints one line per target; `--json` preserves the full server envelope. If an older Session lacks the required scope, the CLI asks you to reauthorize via `auth logout`, `auth login`, and `auth whoami` — it never migrates a Session automatically.
+`rules dryrun` is a standalone 60-second JSON POST with no idempotency key that evaluates a rule without executing actions. Ads material rules pass only `--adv-id`; do not add GMV Max `--shop-id` or `--campaign-id` context. GMV Max rules pass those two target-context fields together. Human output prints `targetName` or `targetId` for each target; `--json` preserves the full server envelope. Treat explicit material target/page/budget errors as failures, never as proof of a valid partial evaluation. If an older Session lacks the required scope, the CLI asks you to reauthorize via `auth logout`, `auth login`, and `auth whoami` — it never migrates a Session automatically.
 
 ## Campaign Copy
 

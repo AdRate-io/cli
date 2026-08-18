@@ -454,6 +454,24 @@ describe("CliApplication local surface", () => {
       campaignId: "80001",
       requestId: "dryrun_request",
     })
+
+    await harness.application.execute([
+      "rules",
+      "dryrun",
+      "--rule-id",
+      "44",
+      "--adv-id",
+      "70002",
+      "--request-id",
+      "material_dryrun_request",
+    ])
+    expect(harness.commands.rules.dryRun).toHaveBeenLastCalledWith({
+      ruleId: "44",
+      advId: "70002",
+      shopId: undefined,
+      campaignId: undefined,
+      requestId: "material_dryrun_request",
+    })
     expect(harness.reads.execute).not.toHaveBeenCalled()
   })
 
@@ -663,10 +681,10 @@ describe("CliApplication local surface", () => {
       "--rule-type",
       "ads",
       "--scope",
-      "campaign",
+      "material",
     ])
     expect(harness.reads.execute).toHaveBeenLastCalledWith(
-      { kind: "rules.options", ruleType: "ads", scope: "campaign" },
+      { kind: "rules.options", ruleType: "ads", scope: "material" },
       expect.objectContaining({ json: false })
     )
 

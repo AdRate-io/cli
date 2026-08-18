@@ -127,7 +127,31 @@ describe("RuleCommandService writes", () => {
   })
 
   it("create stdin 与 update file 原样传递对象，显式 Key 覆盖生成值", async () => {
-    const value = harness()
+    const materialCreate = {
+      ruleType: "ads",
+      scope: "material",
+      targets: [
+        {
+          scopeId: "smart-plus-creative-1",
+          targetId: "smart-plus-creative-1",
+          futureTargetField: { retained: true },
+        },
+      ],
+      futureCreateField: { retained: true },
+    }
+    const materialPatch = {
+      pipelines: [
+        {
+          actions: [{ kind: "basic", type: "DISABLE" }],
+          futurePipelineField: { retained: true },
+        },
+      ],
+      futurePatchField: { retained: true },
+    }
+    const value = harness({
+      readStdin: () => Promise.resolve(JSON.stringify(materialCreate)),
+      readFile: () => Promise.resolve(JSON.stringify(materialPatch)),
+    })
     await value.service.create({
       stdin: true,
       idempotencyKey: "explicit_create_key",
@@ -143,7 +167,7 @@ describe("RuleCommandService writes", () => {
       expect.objectContaining({
         path: "/public/v1/rules/create",
         idempotencyKey: "explicit_create_key",
-        json: { name: "stdin" },
+        json: materialCreate,
       })
     )
     expect(value.requestPublic).toHaveBeenNthCalledWith(
@@ -151,7 +175,7 @@ describe("RuleCommandService writes", () => {
       expect.objectContaining({
         path: "/public/v1/rules/7/update",
         idempotencyKey: "explicit_update_key",
-        json: { name: "rule" },
+        json: materialPatch,
       })
     )
   })
@@ -326,62 +350,94 @@ describe("RuleCommandService writes", () => {
 })
 
 describe("RuleCommandService dryrun", () => {
-  it("使用无 Key 的 60 秒 JSON POST，human 每个 target 一行", async () => {
-    const value = harness({
-      result: response(
-        successEnvelope({
-          items: [
+  it("material dryrun 仅传 Ads 上下文，human 展示 target 且 JSON 原样保留未来字段", async () => {
+    const data = {
+      items: [
+        {
+          targetId: "smart-plus-creative-1",
+          targetName: "Smart+ Creative One",
+          hit: true,
+          materialMapping: {
+            smartPlusCreativeId: "smart-plus-creative-1",
+            smartPlusAdId: "smart-plus-ad-1",
+            adMaterialId: "ad-material-1",
+            materialOperationStatus: "ENABLE",
+            futureMappingField: { retained: true },
+          },
+          pipelines: [
             {
-              targetId: "campaign-1",
-              targetName: "Campaign One",
-              hit: true,
-              pipelines: [
+              evaluation: [
                 {
-                  evaluation: [
-                    {
-                      metric: "spend",
-                      operator: ">",
-                      threshold: 100,
-                      actual: 120,
-                      result: true,
-                    },
-                  ],
+                  metric: "cost",
+                  operator: ">",
+                  threshold: 100,
+                  actual: 120,
+                  result: true,
+                  futureEvaluationField: { retained: true },
                 },
               ],
             },
-            { targetId: "campaign-2", hit: false, noData: true },
           ],
-        })
-      ),
+          futureItemField: { retained: true },
+        },
+        {
+          targetId: "smart-plus-creative-2",
+          hit: false,
+          noData: true,
+        },
+      ],
+      futureDryRunField: { retained: true },
+    }
+    const value = harness({
+      result: response(successEnvelope(data)),
     })
     const outcome = await value.service.dryRun({
       ruleId: "42",
       advId: "account-A_1",
-      shopId: "shop-1",
-      campaignId: "campaign-1",
       requestId: "dryrun-request",
     })
 
     expect(outcome.humanLines).toHaveLength(2)
-    expect(outcome.humanLines?.[0]).toContain('target="Campaign One" hit=yes')
-    expect(outcome.humanLines?.[1]).toContain(
-      'target="campaign-2" hit=no noData=yes'
+    expect(outcome.humanLines?.[0]).toContain(
+      'target="Smart+ Creative One" hit=yes'
     )
+    expect(outcome.humanLines?.[1]).toContain(
+      'target="smart-plus-creative-2" hit=no noData=yes'
+    )
+    expect(outcome.envelope.data).toStrictEqual({
+      ruleId: 42,
+      name: "Rule",
+      enabled: false,
+      duplicate: false,
+      ...data,
+    })
     const request = value.requestPublic.mock.calls[0]?.[0]
     expect(request).toEqual({
       method: "POST",
       issuerOrigin: "https://api.adrate.io",
       path: "/public/v1/rules/42/dryrun",
       token: "owner-token",
-      json: {
-        advId: "account-A_1",
-        shopId: "shop-1",
-        campaignId: "campaign-1",
-      },
+      json: { advId: "account-A_1" },
       requestId: "dryrun-request",
       deadlineMs: 60_000,
     })
     expect(request).not.toHaveProperty("idempotencyKey")
+  })
+
+  it("target_limit_exceeded 不误称服务端返回了有效部分集", async () => {
+    const value = harness({
+      result: response(
+        successEnvelope({ items: [], notice: "target_limit_exceeded" })
+      ),
+    })
+    const outcome = await value.service.dryRun({
+      ruleId: "42",
+      advId: "70001",
+    })
+
+    const human = outcome.humanLines?.join("\n") ?? ""
+    expect(human).toContain("server reported target_limit_exceeded")
+    expect(human).not.toContain("bounded target subset")
   })
 
   it("非法 GMV 上下文在读取凭据和联网前拒绝", async () => {

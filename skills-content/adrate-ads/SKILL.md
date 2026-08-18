@@ -159,6 +159,23 @@ Rule writes support Ads, GMV Max product promotion, and GMV Max live promotion. 
 
 Before creating a GMV Max rule or changing its targets, run `gmvmax stores` and `gmvmax campaigns list`; use `gmvmax campaigns get` only when current Campaign details are needed. Then query `rules options` with the exact mapped rule type and intended scope. A GMV Max rule requires `authId`; every target uses `targetType: "campaign"` with `advId` and `shopId`. Include `campaignId` for a Campaign-bound target, or omit it for a full-store target. Do not send timezone in the effective window or targets: the server derives it from account data. GMV Max Rule budget action values accept at most two decimal places and ROAS action values at most one; values must be positive and percentage decreases must be below 100.
 
+### Manage upgraded Smart+ creative materials
+
+Treat Ads scope `material` as the internal Rule scope for the UI's "创意素材", not as a GMV Max creative scope or a raw material-library identifier. Before every create or update, query its current server contract:
+
+```sh
+adrate rules options --rule-type ads --scope material --json
+```
+
+Take metrics, operators, actions, limits, and request shape from that response. Apply these material-specific invariants:
+
+- Treat `scopeId` and `targetId` as `smart_plus_creative_id`, which is the Integrated `ad_id`. Do not substitute Smart+ ad-group or library-material ids.
+- Keep `smartPlusAdId` and `adMaterialId` distinct when `materialMapping` is returned; preserve the mapping when explaining a dry run or execution.
+- Use only `ENABLE` or `DISABLE` for the material operation. Use `day` or `lifetime` time windows and never `hour`. Omit `targetStatuses` entirely; do not send an empty array.
+- Dry-run with the Ads account parameter `--adv-id` only. Do not pass GMV Max `--shop-id` or `--campaign-id` context.
+
+Create material rules disabled, dry-run them, show the Owner the named targets and `materialMapping`, and enable only after explicit confirmation. Inspect explicit dry-run errors and the complete JSON response; never assume an incomplete target/page/budget result is a valid partial evaluation. Every material write follows the existing preview, confirmation, idempotency-key, and receipt-replay safety chain in this Skill.
+
 ### Build the rule body
 
 Start from `requestTemplate.body`, replace every entry listed in `requestTemplate.placeholders` with a real value, then adjust the metrics, operators, values, and actions to the requested intent. Never submit a body that still contains a placeholder such as `<advertiser-id>` or `<store-id>`, and never invent a field: any key outside the template contract is rejected with `UNKNOWN_FIELD`.
@@ -251,6 +268,7 @@ Supported granularity depends on both rule type and scope. `constraints.timeWind
 | Rule type and scope | Granularities | Numeric bounds |
 | --- | --- | --- |
 | Ads campaign, adgroup, ad | `day`, `lifetime` | day 0 to 90 |
+| Ads material | `day`, `lifetime` | query `constraints.timeWindow` |
 | GMV Max campaign, product, live_room | `day`, `hour` | day 0 to 30, hour 1 to 24 |
 | GMV Max creative | `day` | day 0 to 30 |
 

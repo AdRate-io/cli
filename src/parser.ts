@@ -764,9 +764,9 @@ using the retained key.`,
     helpText: `Usage: adrate rules options --rule-type ads|gmv_max_product|gmv_max_live --scope <scope>
 
 Returns the available metrics, actions, operators, time windows, and constraints
-for the given rule type and scope (e.g. campaign, adgroup, ad for Ads rules).
-The response is structured metadata without human-language labels; metric keys
-are self-descriptive.`,
+for the given rule type and scope. For upgraded Smart+ creative-material rules,
+use --rule-type ads --scope material. The response is structured metadata
+without human-language labels; metric keys are self-descriptive.`,
     globalHelpLine:
       "  rules options                    Read rule capability metadata",
   },
@@ -785,7 +785,8 @@ are self-descriptive.`,
     helpText: `Usage: adrate rules list [--rule-type ads|gmv_max_product|gmv_max_live] [--keyword <text>] [--page <n>] [--page-size <1..100>]
 
 Lists automation rules with optional filters. Both Ads and GMV Max rule types
-are supported. The response includes recent execution statistics.`,
+are supported, including Ads rules whose server-provided scope is material.
+The response includes recent execution statistics.`,
     globalHelpLine: "  rules list                       List automation rules",
   },
   {
@@ -802,7 +803,9 @@ are supported. The response includes recent execution statistics.`,
     helpTopic: "rules get",
     helpText: `Usage: adrate rules get --rule-id <id>
 
-Reads one automation rule with full pipeline, condition, and action detail.`,
+Reads one automation rule with full pipeline, condition, and action detail.
+The CLI preserves server-provided scopes such as material without narrowing the
+response to a local schema.`,
     globalHelpLine: "  rules get                        Read one rule detail",
   },
   {
@@ -825,7 +828,9 @@ Creates one disabled automation rule from a JSON object. The CLI checks only val
 and a top-level object; the server is the rule-schema source of truth. An omitted
 key is generated with a rule-create prefix. The CLI sends at most one 15-second
 POST, never writes pending Command state, and never retries automatically.
-If the response is unknown, replay the exact input with the printed original key.`,
+If the response is unknown, replay the exact input with the printed original key.
+For material rules, run the separate rules options command for the Ads material
+scope first.`,
     globalHelpLine:
       "  rules create                     Create one disabled automation rule",
   },
@@ -847,7 +852,9 @@ If the response is unknown, replay the exact input with the printed original key
 
 Applies one top-level JSON object as a rule patch. The server owns structural
 validation. The CLI sends at most one 15-second POST and does not use the pending
-Command journal. Unknown outcomes must be replayed with the original printed key.`,
+Command journal. Unknown outcomes must be replayed with the original printed key.
+For material rules, run the separate rules options command for the Ads material
+scope first.`,
     globalHelpLine: "  rules update                     Update one automation rule",
   },
   {
@@ -932,8 +939,10 @@ intent before running it. Frozen teams may use this stop-loss operation.`,
 
 Evaluates one Ads or GMV Max rule without executing actions. GMV Max rules pass
 both --shop-id and --campaign-id; the two flags must be supplied together.
+Ads material rules pass only --adv-id and no GMV Max target context.
 This is a narrow non-idempotent 60-second JSON POST with no Idempotency-Key.
-Human output prints one target per line; --json preserves the complete envelope.`,
+Human output prints targetName or targetId per line; --json preserves the complete
+envelope, including materialMapping and future server-provided fields.`,
     globalHelpLine:
       "  rules dryrun                     Evaluate one rule without actions",
   },

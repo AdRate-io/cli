@@ -121,12 +121,12 @@ describe("SkillsNotifier", () => {
       required: [
         {
           name: "adrate-shared",
-          version: "1.5.0",
+          version: "1.6.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
         {
           name: "adrate-ads",
-          version: "1.5.0",
+          version: "1.6.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
       ],
@@ -195,7 +195,7 @@ describe("SkillsNotifier", () => {
     await writeFile(
       sharedShell,
       (await readFile(sharedShell, "utf8")).replace(
-        'version: "1.5.0"',
+        'version: "1.6.0"',
         "version: true"
       )
     )

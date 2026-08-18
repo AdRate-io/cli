@@ -286,7 +286,9 @@ function dryRunHumanLines(data: JsonObject): Array<string> {
   if (data.notice === "busy") {
     lines.push("Notice: upstream data was busy; retry the dry run later.")
   } else if (data.notice === "target_limit_exceeded") {
-    lines.push("Notice: the server evaluated a bounded target subset.")
+    lines.push(
+      "Notice: the server reported target_limit_exceeded; inspect the complete JSON response before relying on the result."
+    )
   }
   if (data.outsideEffectiveWindow === true) {
     lines.push("Notice: the rule is outside its effective window.")
