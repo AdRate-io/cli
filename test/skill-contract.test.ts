@@ -75,7 +75,7 @@ describe("Agent Skill publication contracts", () => {
       expect(manifest).not.toBeNull()
       expect(normalizeSkillText(shell)).toBe(shell)
       expect(normalizeSkillText(content)).toBe(content)
-      expect(manifest?.version).toBe("1.5.0")
+      expect(manifest?.version).toBe("1.6.0")
       expect(manifest?.minCliVersion).toBe(BUNDLED_SKILL_MIN_CLI_VERSION)
       expect(manifest?.shellSha256).toBe(sha256SkillText(shell))
       expect(manifest?.contentSha256).toBe(sha256SkillText(content))
@@ -124,7 +124,7 @@ describe("Agent Skill publication contracts", () => {
     ]) {
       expect(
         parseSkillFrontmatter(
-          shell.replace('version: "1.5.0"', `version: ${replacement}`)
+          shell.replace('version: "1.6.0"', `version: ${replacement}`)
         )
       ).toBeNull()
     }
@@ -491,6 +491,28 @@ describe("Agent Skill publication contracts", () => {
       "replay the exact same request with the original key",
       "`duplicate: true` means the server returned the original receipt",
       "They cannot recover a Rule write",
+    ]) {
+      expect(ads).toContain(required)
+    }
+  })
+
+  it("locks the upgraded Smart+ material Rule identity and safety workflow", async () => {
+    const ads = await asset("skills-content", "adrate-ads")
+    for (const required of [
+      "### Manage upgraded Smart+ creative materials",
+      "internal Rule scope for the UI's \"创意素材\"",
+      "adrate rules options --rule-type ads --scope material --json",
+      "Treat `scopeId` and `targetId` as `smart_plus_creative_id`",
+      "which is the Integrated `ad_id`",
+      "Keep `smartPlusAdId` and `adMaterialId` distinct",
+      "when `materialMapping` is returned",
+      "Use only `ENABLE` or `DISABLE`",
+      "Use `day` or `lifetime` time windows and never `hour`",
+      "Omit `targetStatuses` entirely",
+      "Dry-run with the Ads account parameter `--adv-id` only",
+      "Do not pass GMV Max `--shop-id` or `--campaign-id` context",
+      "never assume an incomplete target/page/budget result is a valid partial evaluation",
+      "existing preview, confirmation, idempotency-key, and receipt-replay safety chain",
     ]) {
       expect(ads).toContain(required)
     }

@@ -297,6 +297,11 @@ describe("ReadCommandService HTTP mapping", () => {
       "/public/v1/rules/options?ruleType=ads&scope=campaign",
       15_000,
     ],
+    [
+      ["rules", "options", "--rule-type", "ads", "--scope", "material"],
+      "/public/v1/rules/options?ruleType=ads&scope=material",
+      15_000,
+    ],
     [["rules", "list"], "/public/v1/rules", 15_000],
     [
       [
@@ -418,6 +423,66 @@ describe("ReadCommandService HTTP mapping", () => {
     ])
     expect(outcome.envelope).toMatchObject({ ok: true, data })
     expect(transport.requests[0]).not.toHaveProperty("idempotencyKey")
+  })
+
+  it.each([
+    [
+      ["rules", "list", "--rule-type", "ads"],
+      {
+        rules: [
+          {
+            ruleId: 42,
+            scope: "material",
+            scopeId: "smart-plus-creative-1",
+            futureRuleField: { retained: true },
+          },
+        ],
+        futureListField: "retained",
+      },
+    ],
+    [
+      ["rules", "get", "--rule-id", "42"],
+      {
+        ruleId: 42,
+        scope: "material",
+        scopeId: "smart-plus-creative-1",
+        futureRuleDetail: { retained: true },
+      },
+    ],
+    [
+      ["rules", "executions", "get", "--execution-id", "1001"],
+      {
+        executionId: 1001,
+        scope: "material",
+        materialMapping: {
+          smartPlusCreativeId: "smart-plus-creative-1",
+          smartPlusAdId: "smart-plus-ad-1",
+          adMaterialId: "ad-material-1",
+          futureMappingField: "retained",
+        },
+        futureExecutionField: { retained: true },
+      },
+    ],
+  ] as const)("Rule material 读取 %j 原样保留服务端 data", async (argv, data) => {
+    const requestId = "server-request-1"
+    const transport = new RecordingTransport(null, {}, {
+      status: 200,
+      headers: { "x-request-id": requestId },
+      body: {
+        ok: true,
+        data,
+        meta: { requestId, apiVersion: "v1" },
+      },
+    })
+    const harness = createHarness({ transport })
+    const outcome = await executeArgv(harness.service, argv)
+
+    expect(outcome.envelope).toStrictEqual({
+      ok: true,
+      data,
+      meta: { requestId, apiVersion: "v1" },
+    })
+    expect(transport.requests).toHaveLength(1)
   })
 
   it("不因 pagination 元数据自动请求下一页", async () => {

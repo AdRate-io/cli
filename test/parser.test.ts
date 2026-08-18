@@ -325,6 +325,23 @@ describe("parseArguments", () => {
     })
   })
 
+  it("rules options 将 material 作为 opaque scope 原样解析", () => {
+    expect(
+      parseArguments([
+        "rules",
+        "options",
+        "--rule-type",
+        "ads",
+        "--scope",
+        "material",
+      ]).command
+    ).toEqual({
+      kind: "rules.options",
+      ruleType: "ads",
+      scope: "material",
+    })
+  })
+
   it("解析 GMV Max 读取参数和成对的 dryrun GMV 上下文", () => {
     expect(
       parseArguments([
@@ -1002,6 +1019,26 @@ describe("helpText", () => {
     expect(help).toContain("No team switching")
     expect(help).toContain("npm install -g @adrate/cli")
     expect(help).toContain("adrate skills install")
+  })
+
+  it("Rule 帮助保留 material 的服务端合同与 dryrun 上下文", () => {
+    expect(helpText("rules options")).toContain(
+      "--rule-type ads --scope material"
+    )
+    for (const topic of ["rules create", "rules update"]) {
+      const help = helpText(topic)
+      expect(help).toContain(
+        "separate rules options command for the Ads material"
+      )
+      expect(help).not.toContain("--rule-type")
+      expect(help).not.toContain("--scope")
+    }
+    expect(helpText("rules list")).toContain("server-provided scope is material")
+    expect(helpText("rules get")).toContain("scopes such as material")
+    expect(helpText("rules dryrun")).toContain(
+      "Ads material rules pass only --adv-id"
+    )
+    expect(helpText("rules dryrun")).toContain("materialMapping")
   })
 
   it.each([

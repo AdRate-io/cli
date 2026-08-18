@@ -37,6 +37,7 @@ adrate gmvmax campaigns status --adv-id <id> --campaign-id <id> --set enable|dis
 adrate gmvmax campaigns budget --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate gmvmax campaigns roas --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate rules options --rule-type <type> --scope <scope>
+adrate rules options --rule-type ads --scope material
 adrate rules list [--rule-type <type>] [--keyword <text>]
 adrate rules get --rule-id <id>
 adrate rules create (--file <rule.json> | --stdin)
@@ -104,9 +105,11 @@ Command 型 Campaign 写操作保存最小 pending，包含 credentialId、issue
 
 `rules create` 从 `--file` 或 `--stdin` 二选一读取 JSON，`rules update` 只接受 `--file`。CLI 只校验 JSON 合法且顶层是对象，规则结构和字段约束以服务端为准。`enable`、`disable` 和 `delete` 发送完全无 body 的 POST，不会发送 `{}`。
 
+升级版 Smart+ 创意素材规则使用服务端提供的 Ads scope `material`。create 或 update 前必须运行 `adrate rules options --rule-type ads --scope material --json`，不在 CLI 中固化 metrics、actions 或 time-window 列表。create 和 update 原样发送输入 JSON 对象；list、get、execution detail 和 JSON dry-run 原样保留 `material`、`materialMapping` 及服务端未来字段。
+
 五个规则写命令每次最多发送一次 15 秒请求，不写 pending Command 账本，不自动重试。未显式提供 `--idempotency-key` 时，CLI 按操作生成 `rule-create-*`、`rule-update-*`、`rule-enable-*`、`rule-disable-*` 或 `rule-delete-*` Key。网络、超时或无法确认回执时，必须使用错误中打印的原 Key 和完全相同的输入重放；服务端已明确拒绝的业务错误应先修正输入，再使用新 Key。
 
-`rules dryrun` 是独立的无幂等键 60 秒 JSON POST，只评估规则而不执行动作。GMV Max 规则通过 `--shop-id` 与 `--campaign-id` 传递目标上下文，两个参数必须同时提供。human 输出每个 target 一行，`--json` 保留完整服务端 envelope。若旧 Session 没有对应 scope，CLI 会要求按 `auth logout`、`auth login`、`auth whoami` 重新授权，不会自动迁移 Session。
+`rules dryrun` 是独立的无幂等键 60 秒 JSON POST，只评估规则而不执行动作。Ads material 规则只传 `--adv-id`，不得添加 GMV Max 的 `--shop-id` 或 `--campaign-id` 上下文；GMV Max 规则则必须同时提供这两个参数。human 输出按 target 显示 `targetName` 或 `targetId`，`--json` 保留完整服务端 envelope。material 的 target/page/budget 显式错误必须按失败处理，不得当作有效的部分评估。若旧 Session 没有对应 scope，CLI 会要求按 `auth logout`、`auth login`、`auth whoami` 重新授权，不会自动迁移 Session。
 
 ## Campaign Copy
 

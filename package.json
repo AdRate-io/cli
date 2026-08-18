@@ -1,6 +1,6 @@
 {
   "name": "@adrate/cli",
-  "version": "0.1.0-beta.10",
+  "version": "0.1.0-beta.11",
   "description": "Official AdRate command-line client",
   "repository": {
     "type": "git",

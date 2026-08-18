@@ -440,6 +440,19 @@ describe("production runtime Auth entry E2E", () => {
 
 describe("production runtime Command entry E2E", () => {
   it("wires rules create from parser through file input to one Public POST", async () => {
+    const materialBody = {
+      ruleType: "ads",
+      scope: "material",
+      name: "Runtime Material Rule",
+      targets: [
+        {
+          scopeId: "smart-plus-creative-1",
+          targetId: "smart-plus-creative-1",
+          futureTargetField: { retained: true },
+        },
+      ],
+      futureCreateField: { retained: true },
+    }
     const harness = await createHarness(
       (input) => {
         const id = requestId(input)
@@ -454,7 +467,7 @@ describe("production runtime Command entry E2E", () => {
             ok: true,
             data: {
               ruleId: 42,
-              name: "Runtime Rule",
+              name: "Runtime Material Rule",
               enabled: false,
               duplicate: false,
             },
@@ -464,7 +477,7 @@ describe("production runtime Command entry E2E", () => {
       },
       {
         key: "runtime_suffix",
-        readRuleFile: () => Promise.resolve('{"name":"Runtime Rule"}'),
+        readRuleFile: () => Promise.resolve(JSON.stringify(materialBody)),
       }
     )
 
@@ -486,7 +499,7 @@ describe("production runtime Command entry E2E", () => {
         deadlineMs: 15_000,
         token: OWNER_SESSION_TOKEN,
         idempotencyKey: "rule-create-runtime_suffix",
-        json: { name: "Runtime Rule" },
+        json: materialBody,
         requestId: "runtime_rule_request",
       },
     ])
