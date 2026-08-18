@@ -76,7 +76,7 @@ describe("SkillsInstallService", () => {
       ])
       for (const skill of skills) {
         expect(skill.status).toBe("installed")
-        expect(skill.version).toBe("1.6.0")
+        expect(skill.version).toBe("1.6.1")
       }
     }
     expect(outcome.humanOutput).toMatchObject({
@@ -135,7 +135,7 @@ describe("SkillsInstallService", () => {
       "skill-manifest.json"
     )
     const shell = (await readFile(shellPath, "utf8")).replace(
-      'version: "1.6.0"',
+      'version: "1.6.1"',
       'version: "2.0.0"'
     )
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {

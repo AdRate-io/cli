@@ -147,8 +147,8 @@ describe("build-time Skills asset validator", () => {
       "skill-manifest.json"
     )
     const shell = (await readFile(shellPath, "utf8")).replace(
-      'version: "1.6.0"',
-      'version: "1.6.1"'
+      'version: "1.6.1"',
+      'version: "1.6.2"'
     )
     const content = `${(await readFile(contentPath, "utf8")).trimEnd()}\n\nNew guidance.\n`
     await writeFile(shellPath, shell)
@@ -163,7 +163,7 @@ describe("build-time Skills asset validator", () => {
       shellSha256: string
       contentSha256: string
     }
-    expect(manifest.version).toBe("1.6.1")
+    expect(manifest.version).toBe("1.6.2")
     expect(manifest.shellSha256).toBe(sha256SkillText(shell))
     expect(manifest.contentSha256).toBe(sha256SkillText(content))
     const firstManifest = await readFile(manifestPath, "utf8")

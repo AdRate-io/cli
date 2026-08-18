@@ -140,8 +140,10 @@ if (newSkillVersion) {
   const oldCliLiterals = [...new Set([oldCliVersion, shells[0].minCliVersion])]
   for (const path of listTestFiles()) {
     let count = 0
-    count += replaceInFile(path, oldSkillVersion, newSkillVersion, { expectAtLeastOne: false })
+    // 探针必须先替换：Skill 恰好递增一个 patch 时 newSkillVersion === oldProbe，
+    // 若先替换版本字面量，探针遍会把刚写入的新版本再顶一格（1.6.0→1.6.1→1.6.2）
     count += replaceInFile(path, oldProbe, newProbe, { expectAtLeastOne: false })
+    count += replaceInFile(path, oldSkillVersion, newSkillVersion, { expectAtLeastOne: false })
     for (const literal of oldCliLiterals) {
       count += replaceInFile(path, literal, newCliVersion, { expectAtLeastOne: false })
     }
