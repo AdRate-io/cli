@@ -1,8 +1,8 @@
 import {
   BASE64URL_PATTERN,
   CLIENT_ID,
-  LOWERCASE_UUID_PATTERN,
   CLI_CAPABILITIES,
+  LOWERCASE_UUID_PATTERN,
   OWNER_TOKEN_PREFIX,
 } from "../constants.js"
 import { validateBrowserUrl } from "../config/issuer.js"

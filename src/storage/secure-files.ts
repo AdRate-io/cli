@@ -60,6 +60,19 @@ export class SecureFileError extends Error {
   }
 }
 
+/**
+ * 本地状态文件在读写过程中被并发改动（stat 前后不一致、identity 漂移等）。
+ * 这是瞬态竞争而非安全违规——macOS APFS 上 Spotlight 改扩展属性即可触发 ctime 变化——
+ * 重试即可恢复，application 层据此映射为可重试退出码。持久性违规（symlink / 权限 / owner /
+ * 过大 / 非 UTF-8）仍抛父类 SecureFileError，重试无意义。
+ */
+export class SecureFileChangedError extends SecureFileError {
+  constructor(message: string) {
+    super(message)
+    this.name = "SecureFileChangedError"
+  }
+}
+
 export class SecureFileLockBusyError extends SecureFileError {
   constructor() {
     super("Another AdRate CLI process is updating local authentication state.")
@@ -194,7 +207,7 @@ export class SecureFileSystem {
         before.dev !== opened.dev ||
         before.ino !== opened.ino
       ) {
-        throw new SecureFileError(
+        throw new SecureFileChangedError(
           "The local state file changed while it was being opened."
         )
       }
@@ -222,7 +235,7 @@ export class SecureFileSystem {
       try {
         pathAfter = await lstat(target)
       } catch {
-        throw new SecureFileError(
+        throw new SecureFileChangedError(
           "The local state file changed while it was being read."
         )
       }
@@ -242,7 +255,7 @@ export class SecureFileSystem {
         after.mtimeMs !== pathAfter.mtimeMs ||
         after.ctimeMs !== pathAfter.ctimeMs
       ) {
-        throw new SecureFileError(
+        throw new SecureFileChangedError(
           "The local state file changed while it was being read."
         )
       }
@@ -467,7 +480,7 @@ export class SecureFileSystem {
       current?.device !== expected?.device ||
       current?.inode !== expected?.inode
     ) {
-      throw new SecureFileError(
+      throw new SecureFileChangedError(
         "The local state file changed before the operation completed."
       )
     }
@@ -504,7 +517,7 @@ export class SecureFileSystem {
         before.dev !== opened.dev ||
         before.ino !== opened.ino
       ) {
-        throw new SecureFileError(
+        throw new SecureFileChangedError(
           "The local state directory changed while it was being synced."
         )
       }

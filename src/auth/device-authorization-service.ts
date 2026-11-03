@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
 import {
   CLIENT_ID,
+  CLI_CAPABILITIES,
+  CLI_SCOPE,
   DEADLINES_MS,
   DEVICE_GRANT_TYPE,
   EXIT_CODE,
-  CLI_CAPABILITIES,
-  CLI_SCOPE,
 } from "../constants.js"
 import { createLocalSuccess } from "../contracts/envelope.js"
 import {

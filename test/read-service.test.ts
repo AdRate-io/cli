@@ -304,11 +304,18 @@ describe("ReadCommandService HTTP mapping", () => {
     ],
     [["rules", "list"], "/public/v1/rules", 15_000],
     [
+      ["rules", "list", "--scope", "campaign"],
+      "/public/v1/rules?scope=campaign",
+      15_000,
+    ],
+    [
       [
         "rules",
         "list",
         "--rule-type",
         "ads",
+        "--scope",
+        "material",
         "--keyword",
         "cpa",
         "--page",
@@ -316,7 +323,7 @@ describe("ReadCommandService HTTP mapping", () => {
         "--page-size",
         "50",
       ],
-      "/public/v1/rules?ruleType=ads&keyword=cpa&page=2&pageSize=50",
+      "/public/v1/rules?ruleType=ads&scope=material&keyword=cpa&page=2&pageSize=50",
       15_000,
     ],
     [["rules", "get", "--rule-id", "42"], "/public/v1/rules/42", 15_000],

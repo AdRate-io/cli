@@ -4,6 +4,12 @@ import { CLI_VERSION } from "../src/constants.js"
 import { createLocalSuccess } from "../src/contracts/envelope.js"
 import { dependencyFailure } from "../src/errors.js"
 import { renderOutcome } from "../src/output.js"
+import { PendingCommandChangedError } from "../src/commands/pending-command-repository.js"
+import {
+  SecureFileChangedError,
+  SecureFileError,
+  SecureFileLockBusyError,
+} from "../src/storage/secure-files.js"
 import type { AuthService } from "../src/auth/auth-service.js"
 import type { ReadCommandService } from "../src/commands/read-service.js"
 import type { CliOutcome } from "../src/errors.js"
@@ -65,6 +71,7 @@ function createHarness() {
     skills: {
       list: vi.fn(() => Promise.resolve(successOutcome("skills-list"))),
       read: vi.fn(() => Promise.resolve(successOutcome("skills-read"))),
+      status: vi.fn(() => Promise.resolve(successOutcome("skills-status"))),
     },
     skillsInstall: {
       install: vi.fn(() => Promise.resolve(successOutcome("skills-install"))),
@@ -693,6 +700,8 @@ describe("CliApplication local surface", () => {
       "list",
       "--rule-type",
       "ads",
+      "--scope",
+      "material",
       "--keyword",
       "cpa",
       "--page",
@@ -704,6 +713,7 @@ describe("CliApplication local surface", () => {
       {
         kind: "rules.list",
         ruleType: "ads",
+        scope: "material",
         keyword: "cpa",
         page: "2",
         pageSize: "50",
@@ -851,5 +861,50 @@ describe("CliApplication local surface", () => {
     expect(JSON.stringify(execution.outcome.envelope)).not.toContain(
       "internal secret implementation detail"
     )
+  })
+
+  it.each([
+    ["锁繁忙", () => new SecureFileLockBusyError()],
+    [
+      "读取期间文件被并发改动",
+      () =>
+        new SecureFileChangedError(
+          "The local state file changed while it was being read."
+        ),
+    ],
+    ["pending 记录并发改动", () => new PendingCommandChangedError()],
+  ])("本地状态瞬态错误（%s）映射为可重试退出码", async (_label, make) => {
+    const harness = createHarness()
+    harness.reads.execute.mockRejectedValueOnce(make())
+    const execution = await harness.application.execute(["capabilities"])
+
+    expect(execution.outcome.exitCode).toBe(4)
+    expect(execution.outcome.envelope.ok).toBe(false)
+    if (!execution.outcome.envelope.ok) {
+      expect(execution.outcome.envelope.error).toMatchObject({
+        code: "DEPENDENCY_UNAVAILABLE",
+        retryable: true,
+      })
+    }
+  })
+
+  it("本地状态持久性安全违规不可重试，但透出具体原因", async () => {
+    const harness = createHarness()
+    harness.reads.execute.mockRejectedValueOnce(
+      new SecureFileError("A local state path is a symbolic link.")
+    )
+    const execution = await harness.application.execute(["capabilities"])
+
+    expect(execution.outcome.exitCode).toBe(1)
+    expect(execution.outcome.envelope.ok).toBe(false)
+    if (!execution.outcome.envelope.ok) {
+      expect(execution.outcome.envelope.error).toMatchObject({
+        code: "DEPENDENCY_UNAVAILABLE",
+        retryable: false,
+      })
+      expect(execution.outcome.envelope.error.message).toContain(
+        "A local state path is a symbolic link."
+      )
+    }
   })
 })

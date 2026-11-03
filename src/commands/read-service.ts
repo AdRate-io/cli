@@ -369,6 +369,9 @@ export class ReadCommandService {
         if (command.ruleType !== undefined) {
           query.set("ruleType", command.ruleType)
         }
+        if (command.scope !== undefined) {
+          query.set("scope", command.scope)
+        }
         if (command.keyword !== undefined) {
           query.set("keyword", command.keyword)
         }

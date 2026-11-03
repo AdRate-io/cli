@@ -1034,6 +1034,7 @@ describe("helpText", () => {
       expect(help).not.toContain("--scope")
     }
     expect(helpText("rules list")).toContain("server-provided scope is material")
+    expect(helpText("rules list")).toContain("[--scope <scope>]")
     expect(helpText("rules get")).toContain("scopes such as material")
     expect(helpText("rules dryrun")).toContain(
       "Ads material rules pass only --adv-id"

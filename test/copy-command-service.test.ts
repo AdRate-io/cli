@@ -44,14 +44,18 @@ function previewSuccess(data: JsonObject): PublicEnvelope {
   }
 }
 
-function errorEnvelope(code: string, retryable: boolean): PublicEnvelope {
+function errorEnvelope(
+  code: string,
+  retryable: boolean,
+  details: JsonObject = {}
+): PublicEnvelope {
   return {
     ok: false,
     error: {
       code,
       message: "Copy request rejected.",
       retryable,
-      details: {},
+      details,
     },
     meta: { requestId: "copy-error", apiVersion: "v1" },
   }
@@ -300,6 +304,46 @@ describe("CopyCommandService submit", () => {
     expect(warnings).toContain("UTC day rolls over")
     expect(warnings).toContain("daily-copy-key")
     expect(warnings).not.toContain("new idempotency key")
+  })
+
+  it("AD_CREATION_QUOTA_EXCEEDED 展示额度数字并要求换新 key", async () => {
+    const value = harness({
+      result: response(
+        errorEnvelope("AD_CREATION_QUOTA_EXCEEDED", false, {
+          required: 30,
+          remaining: 4,
+          limit: 100,
+          periodEndAt: "2035-02-01T00:00:00.000Z",
+        }),
+        422
+      ),
+    })
+    const outcome = await value.service.submit({
+      file: "copy.json",
+      idempotencyKey: "quota-copy-key",
+    })
+    const warnings = outcome.warnings.join("\n")
+    expect(outcome.exitCode).toBe(1)
+    expect(warnings).toContain("needs 30, 4 remaining")
+    expect(warnings).toContain("resets at 2035-02-01T00:00:00.000Z")
+    expect(warnings).toContain("new idempotency key")
+    expect(warnings).toContain("quota-copy-key")
+    expect(warnings).not.toContain("UTC day rolls over")
+  })
+
+  it("AD_CREATION_QUOTA_EXCEEDED 缺 details 时省略数字但仍要求换新 key", async () => {
+    const value = harness({
+      result: response(errorEnvelope("AD_CREATION_QUOTA_EXCEEDED", false), 422),
+    })
+    const outcome = await value.service.submit({
+      file: "copy.json",
+      idempotencyKey: "quota-copy-key-2",
+    })
+    const warnings = outcome.warnings.join("\n")
+    expect(outcome.exitCode).toBe(1)
+    expect(warnings).toContain("Campaign creation quota exhausted")
+    expect(warnings).not.toContain("needs")
+    expect(warnings).toContain("new idempotency key")
   })
 
   it("其他 nonretryable 错误保留原 key，不泛化为换新 key", async () => {

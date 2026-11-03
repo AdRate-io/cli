@@ -212,7 +212,6 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
   const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT
   const installedSkillsRoot =
     options.installedSkillsRoot ?? join(homedir(), ".agents", "skills")
-  const skills = new SkillsService(skillCatalog)
   const skillsInstall = new SkillsInstallService(skillCatalog, {
     packageRoot,
     installedSkillsRoot,
@@ -221,6 +220,11 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     catalog: skillCatalog,
     installedSkillsRoot,
     environment,
+    upgrader: skillsInstall,
+  })
+  const skills = new SkillsService(skillCatalog, {
+    inspector: skillsNotifier,
+    installedSkillsRoot,
   })
   const application = new CliApplication(
     auth,

@@ -93,13 +93,17 @@ adrate ads copy tasks get --task-id 42 --json
 
 Stop on `completed`, `failed`, or `partial`. If the limit expires while the task is still processing, report that it remains in progress. For `partial`, report every target item with its `targetAdvId`, item `status`, `error`, and `resultData`; within `resultData`, include each Campaign and Adgroup result and warning instead of summarizing the task as completed.
 
+A target item can itself be `partial`. That status means at least one Campaign was created for that target and counted against the campaign creation quota, while some Campaigns, Adgroups, or Ads did not fully succeed. Its `error` may be absent, because an item-level error is written only when at least one Campaign failed entirely. Never report a `partial` item as a failed copy or as error-free; report each Campaign in its `resultData` with what was created and what was not.
+
+Warning keys are stable identifiers; explain them in plain words instead of quoting the key alone. `landing_page_override_ignored` and its older name `lead_gen_landing_page_override_ignored` mean the same thing and may both appear: the copy file supplied a landing page URL override, but the target ad cannot use a landing page URL (for example an instant form, messaging, or app promotion ad), so the override was ignored and the copy continued without it; read that ad's own result for whether it was created. Despite the `lead_gen` prefix, the older name applies to any objective.
+
 Use the bare tasks command to read one list page; never add a `list` subcommand:
 
 ```sh
 adrate ads copy tasks --status partial --page 1 --page-size 20 --json
 ```
 
-Campaign Copy submit uses a receipt, not a Command journal. On a network failure, timeout, invalid response, or lost response, replay the original file unchanged with the original idempotency key. An explicit `INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED` rejection proves that no Copy task was accepted; correct the validation or quota issue and submit the corrected file with a new key. `commands get`, `commands pending`, and `commands resume` do not recover Copy submit.
+Campaign Copy submit uses a receipt, not a Command journal. On a network failure, timeout, invalid response, or lost response, replay the original file unchanged with the original idempotency key. An explicit `INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED` rejection proves that no Copy task was accepted; correct the validation or quota issue and submit the corrected file with a new key. `AD_CREATION_QUOTA_EXCEEDED` means the subscription period's campaign creation quota is exhausted and no Copy task was accepted; report `required`, `remaining`, and `periodEndAt` from `error.details`, then submit with a new key only after creation units are added or the plan is upgraded. `commands get`, `commands pending`, and `commands resume` do not recover Copy submit.
 
 ## Change one GMV Max Campaign
 
@@ -131,8 +135,11 @@ List rules with optional filters:
 
 ```sh
 adrate rules list --rule-type ads --json
+adrate rules list --rule-type ads --scope material --json
 adrate rules list --keyword cpa --page 1 --page-size 50 --json
 ```
+
+`--scope` filters by the rule's scope (`campaign`, `adgroup`, `ad`, `material`, `product`, `creative`, `live_room`); an unknown scope is rejected rather than ignored. `campaign` exists in both Ads and GMV Max, so `--scope campaign` without `--rule-type` returns rules of both families; add `--rule-type` whenever you mean only one of them.
 
 Read one rule with full pipeline, condition, and action detail:
 
@@ -159,6 +166,8 @@ Rule writes support Ads, GMV Max product promotion, and GMV Max live promotion. 
 
 Before creating a GMV Max rule or changing its targets, run `gmvmax stores` and `gmvmax campaigns list`; use `gmvmax campaigns get` only when current Campaign details are needed. Then query `rules options` with the exact mapped rule type and intended scope. A GMV Max rule requires `authId`; every target uses `targetType: "campaign"` with `advId` and `shopId`. Include `campaignId` for a Campaign-bound target, or omit it for a full-store target. Do not send timezone in the effective window or targets: the server derives it from account data. GMV Max Rule budget action values accept at most two decimal places and ROAS action values at most one; values must be positive and percentage decreases must be below 100.
 
+Ads rules in the `campaign`, `adgroup`, and `ad` scopes and every GMV Max rule scope accept the `notify:feishu` action when `rules options` lists it. It has no TikTok side effect: when the conditions match, AdRate groups the matched objects of one rule into a single Feishu/Lark card every few minutes and posts it to the Feishu webhook configured in AdRate Team settings. Use it alone for an alert-only rule or alongside other actions, but never with `custom_close_other_ads`. If the team has no webhook, the execution records the notification as skipped, so ask the Owner to configure the webhook before relying on it.
+
 ### Manage upgraded Smart+ creative materials
 
 Treat Ads scope `material` as the internal Rule scope for the UI's "创意素材", not as a GMV Max creative scope or a raw material-library identifier. Before every create or update, query its current server contract:
@@ -173,6 +182,8 @@ Take metrics, operators, actions, limits, and request shape from that response. 
 - Keep `smartPlusAdId` and `adMaterialId` distinct when `materialMapping` is returned; preserve the mapping when explaining a dry run or execution.
 - Use only `ENABLE` or `DISABLE` for the material operation. Use `day` or `lifetime` time windows and never `hour`. Omit `targetStatuses` entirely; do not send an empty array.
 - Dry-run with the Ads account parameter `--adv-id` only. Do not pass GMV Max `--shop-id` or `--campaign-id` context.
+
+To review or clean up existing material rules, list exactly that set with `adrate rules list --rule-type ads --scope material --json` instead of filtering a full listing yourself.
 
 Create material rules disabled, dry-run them, show the Owner the named targets and `materialMapping`, and enable only after explicit confirmation. Inspect explicit dry-run errors and the complete JSON response; never assume an incomplete target/page/budget result is a valid partial evaluation. Every material write follows the existing preview, confirmation, idempotency-key, and receipt-replay safety chain in this Skill.
 
@@ -256,6 +267,8 @@ Condition and action syntax:
 - The `value` type follows the metric type: a number or numeric string for `numeric`, `attribute`, and `time` metrics; a non-empty string for `text`; one of the metric's `enumValues` for `enum`; and a comma-separated id string for the `in` and `not_in` operators.
 - Send `timeWindow` for every metric whose `timeWindowRequired` is true; omitting it returns `REQUIRED`.
 - An action is `{ kind: "basic", type, value? }`, or `{ kind: "session", type, params }` when that action's `needsSessionParams` is true; `kind` must match the action exactly. Include `value` only when `needsValue` is true, and send it as a decimal string, not a number. Session `params` follow the action's own `sessionParamsSchema`.
+- The GMV Max creative heat budget actions `creative_session:heat_budget:inc:$`, `creative_session:heat_budget:inc:%`, `creative_session:heat_budget:dec:$`, and `creative_session:heat_budget:dec:%` are session actions whose `params` is only `{ "budget": N }`. Here `budget` is the adjustment amount, not the new daily budget: `sessionParamsSchema.budgetUnit` is `usd` for the `$` actions and `percent` for the `%` actions. `scheduleTypes: []` means these actions accept no schedule field, and sending one returns `INVALID_VALUE`. A decrease stops at the heat budget minimum of 10, and a creative already at 10 is recorded as skipped. A `dec:%` amount above 100 returns `INVALID_DECREASE_PERCENT`.
+- Heat budget actions only change creatives that already have an active heat session, and they adjust again on every matching run. Pair them with `{ "metric": "has_heat_session", "operator": "enum_equal", "value": "true" }` and a ceiling such as `{ "metric": "heat_budget", "operator": "less", "value": 200 }`, so a slow-moving condition cannot raise the budget without limit. For example, a `creative` scope pipeline with those two leaves plus `{ "metric": "roi", "operator": "greater_or_equal", "value": 3, "timeWindow": { "granularity": "day", "fromDaysAgo": 0, "toDaysAgo": 0 } }` under `all` can use `{ "kind": "session", "type": "creative_session:heat_budget:inc:$", "params": { "budget": 20 } }`.
 
 Time window syntax, one shape per granularity:
 
@@ -274,13 +287,26 @@ Supported granularity depends on both rule type and scope. `constraints.timeWind
 
 Ads rejects every `hour` window and GMV Max rejects every `lifetime` window with `UNSUPPORTED_TIME_WINDOW`. Some Ads metrics reject `lifetime` individually, marked by `supportsLifetime: false` on the metric. `timeWindowPresets` lists ready-made windows already filtered for the queried scope; a custom window is accepted whenever it satisfies `constraints.timeWindow`.
 
+Period comparison: a leaf whose metric has `supportsCompare: true` may add `compare: { "timeWindow": { "granularity": "day", "fromDaysAgo": N, "toDaysAgo": M } }`. The leaf then tests the change rate in percent of its own `timeWindow` against `compare.timeWindow`, so `value` is a percentage: `{ "metric": "spend", "operator": "less", "value": -20, "timeWindow": { "granularity": "day", "fromDaysAgo": 1, "toDaysAgo": 1 }, "compare": { "timeWindow": { "granularity": "day", "fromDaysAgo": 2, "toDaysAgo": 2 } } }` means yesterday's spend dropped by more than 20% versus the day before. Both windows must be `day` windows within `constraints.compare.maxDaysAgo`, otherwise `UNSUPPORTED_TIME_WINDOW`. Either window may include today (`toDaysAgo: 0`) and the two may differ in length, but a window that includes today only counts data so far: cumulative metrics such as spend and orders run low and conversion metrics lag attribution, so "today vs yesterday spend dropped 50%" can be true for many objects in the morning. Pair such a leaf with an absolute condition like today's spend > 50, and use equal-length windows for cumulative metrics. A comparison window counts toward the distinct time window limit, and a zero or missing baseline makes the leaf false. In evaluation detail such a leaf reports `actual` as the change rate with `unit: "percent"` and adds `compare.current` and `compare.baseline` with the raw values of both windows. Ads material rules do not support `compare`.
+
+Match mode decides which matched objects the actions run on in each check. It is optional and works the same way for Ads, Ads `material`, and GMV Max rules:
+
+- `"matchMode": "all_match"` (the default) runs on every matched object. `any_match` runs on one matched object, with no guarantee which one. `top_n_match` ranks matched objects and runs on the first N.
+- `top_n_match` requires `"matchConfig": { "n": 1-100, "sortField": "<metric>", "sortOrder": "asc" | "desc", "timeWindow": { ... } }`. `sortField` with `timeWindow` must be a numeric condition leaf already used in the pipelines, and period-comparison leaves do not count. Ranking reuses exactly the value that leaf evaluated, so nothing extra is fetched. You may omit `timeWindow` when `sortField` appears in the conditions with a single time window; the server then derives it, and `rules get` always returns it explicitly. A metric used with several windows needs an explicit `timeWindow`, otherwise `matchConfig.timeWindow` returns `REQUIRED`. A sort pair not found in the conditions returns `INVALID_VALUE` on `matchConfig.sortField` or `matchConfig.timeWindow`. Objects whose sort value is N/A rank last in either order.
+- For any other mode the server stores `matchConfig` as null. To switch a rule back to every matched object, patch `"matchMode": "all_match"`.
+- N limits the objects selected per check, not per day. With `stop_once_daily`, objects already handled today are skipped after ranking, so the daily total can exceed N when the ranking changes.
+- Ads applies the mode per rule per ad account, so each bound ad account takes its own top N. GMV Max applies it per store across all bound Campaigns.
+- With several pipelines, the mode applies to each pipeline's matched objects separately, and an object matched but not selected still does not fall through to later pipelines.
+- Only `all_match` is allowed when any pipeline has no conditions or the rule uses `custom_close_other_ads`.
+- When a pipeline update removes the sort leaf, the update is rejected. It is never silently switched to `all_match`.
+
 ### Create, review, and enable
 
 Follow this order for every new rule:
 
 1. Discover the target, query its exact rule type and scope with `rules options`, and build the body from `requestTemplate` as described above.
 2. Create one rule. Creation always returns `enabled=false`.
-3. Dry-run the disabled rule against one bound Campaign and show the Owner the returned targets, hits, and evaluation evidence.
+3. Dry-run the disabled rule against one bound Campaign and show the Owner the returned targets, hits, and evaluation evidence. `hit` only means the conditions are met. For an Ads or `material` rule whose `matchMode` is not `all_match`, each target also carries `selected`, which tells whether this check would act on it, using the same pipeline order and ranking as live execution. `selected` is absent when the result was truncated at the target limit. A GMV Max dry run covers one Campaign and cannot simulate the store-wide `any_match` or `top_n_match` selection: it returns `matchModeNotSimulated: true`, so a hit there does not guarantee execution.
 4. Enable only after the Owner explicitly confirms the shown result.
 
 ```sh
@@ -340,6 +366,8 @@ Rule writes use lightweight receipts, not the Command journal. Let the CLI gener
 ## Preserve values and reporting limits
 
 Display `spend`, currency amounts, and ratio fields as their original strings so precision is not lost. `null` means N/A, never zero. Do not add monetary values across different currencies. Reports are delayed, can receive attribution backfill, and can be truncated. Read `meta.pagination` and fetch only the pages the task needs; do not automatically download everything or simply average row-level ratios.
+
+In a Campaign report, `meta.report.timezone` is the account's display timezone name, not the timezone TikTok uses to split days. TikTok cuts `day` and `hour` buckets by `meta.report.rawTimezone`, which is often a fixed offset such as `Etc/GMT+8` while `timezone` shows `America/Los_Angeles`. The two can differ by an hour during daylight saving time and by half an hour for some accounts all year. Report dates are passed through from TikTok unchanged, so the data is correct. When you explain bucket boundaries or convert a bucket to another timezone, use `rawTimezone`. If `rawTimezone` is `null`, the exact boundary is unknown: say so instead of falling back to `timezone`.
 
 ## Keep Campaign writes server-owned
 

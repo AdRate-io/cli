@@ -42,7 +42,7 @@ function applicationWithLogout(outcome: CliOutcome): CliApplication {
         delete: vi.fn(),
         dryRun: vi.fn(),
       },
-      skills: { list: vi.fn(), read: vi.fn() },
+      skills: { list: vi.fn(), read: vi.fn(), status: vi.fn() },
       skillsInstall: { install: vi.fn() },
     }
   )

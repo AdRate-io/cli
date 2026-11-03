@@ -75,7 +75,7 @@ describe("Agent Skill publication contracts", () => {
       expect(manifest).not.toBeNull()
       expect(normalizeSkillText(shell)).toBe(shell)
       expect(normalizeSkillText(content)).toBe(content)
-      expect(manifest?.version).toBe("1.6.1")
+      expect(manifest?.version).toBe("1.7.0")
       expect(manifest?.minCliVersion).toBe(BUNDLED_SKILL_MIN_CLI_VERSION)
       expect(manifest?.shellSha256).toBe(sha256SkillText(shell))
       expect(manifest?.contentSha256).toBe(sha256SkillText(content))
@@ -124,7 +124,7 @@ describe("Agent Skill publication contracts", () => {
     ]) {
       expect(
         parseSkillFrontmatter(
-          shell.replace('version: "1.6.1"', `version: ${replacement}`)
+          shell.replace('version: "1.7.0"', `version: ${replacement}`)
         )
       ).toBeNull()
     }
@@ -221,6 +221,11 @@ describe("Agent Skill publication contracts", () => {
       "`conversionRateV2` is the impression-based conversion rate"
     )
     expect(ads).toContain("Never mix the two rates")
+    // 报表日切口径：timezone 只是展示名，桶边界按 rawTimezone（OPT-260923-2 方案 ①）
+    expect(ads).toContain(
+      "TikTok cuts `day` and `hour` buckets by `meta.report.rawTimezone`"
+    )
+    expect(ads).toContain("say so instead of falling back to `timezone`")
 
     const assertExclusions = (text: string) => {
       const exclusions = sectionBody(text, "CLI exclusions")
@@ -258,6 +263,17 @@ describe("Agent Skill publication contracts", () => {
     }
   })
 
+  it("keeps the 0.2.0-only usage that forces minCliVersion 0.2.0, plus both copy warning names", async () => {
+    const ads = await asset("skills-content", "adrate-ads")
+    // `rules list --scope` 是 0.2.0 才有的参数（0.2.0 报未知参数）：正文引用它是 minCliVersion
+    // 必须升到 0.2.0 的依据。删掉这里的引用时要同步评估 minCliVersion，不能只改正文
+    expect(ads).toContain("adrate rules list --rule-type ads --scope material --json")
+    // S1：复制告警新旧两个名字同义（历史 result_data 永远是旧名，Agent 两个都要认）
+    expect(ads).toContain(
+      "`landing_page_override_ignored` and its older name `lead_gen_landing_page_override_ignored` mean the same thing"
+    )
+  })
+
   it("locks the Campaign Copy workflow and rejects contract mutations", async () => {
     const ads = await asset("skills-content", "adrate-ads")
     const copy = sectionBody(ads, "Copy Campaigns through an asynchronous task")
@@ -277,12 +293,15 @@ describe("Agent Skill publication contracts", () => {
       "For `partial`, report every target item",
       "`targetAdvId`, item `status`, `error`, and `resultData`",
       "include each Campaign and Adgroup result and warning",
+      "Its `error` may be absent",
+      "Never report a `partial` item as a failed copy or as error-free",
       "adrate ads copy tasks --status partial --page 1 --page-size 20 --json",
       "never add a `list` subcommand",
       "replay the original file unchanged with the original idempotency key",
       "`INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED`",
       "proves that no Copy task was accepted",
       "submit the corrected file with a new key",
+      "`AD_CREATION_QUOTA_EXCEEDED` means the subscription period's campaign creation quota is exhausted",
       "`commands get`, `commands pending`, and `commands resume` do not recover Copy submit",
     ]
     const orderedCommands = [
@@ -375,6 +394,7 @@ describe("Agent Skill publication contracts", () => {
         "replay the exact original file body with the original key",
         "`INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED`",
         "submit the corrected body with a new key",
+        "add creation units or upgrade the plan and submit with a new key",
         "`commands get`, `commands pending`, and `commands resume` do not apply to Campaign Copy submit",
       ]) {
         expect(replay).toContain(required)
@@ -513,6 +533,25 @@ describe("Agent Skill publication contracts", () => {
       "Do not pass GMV Max `--shop-id` or `--campaign-id` context",
       "never assume an incomplete target/page/budget result is a valid partial evaluation",
       "existing preview, confirmation, idempotency-key, and receipt-replay safety chain",
+    ]) {
+      expect(ads).toContain(required)
+    }
+  })
+
+  it("locks the shared match mode contract for Ads, material, and GMV Max (S3)", async () => {
+    const ads = await asset("skills-content", "adrate-ads")
+    for (const required of [
+      "works the same way for Ads, Ads `material`, and GMV Max rules",
+      "must be a numeric condition leaf already used in the pipelines",
+      "You may omit `timeWindow` when `sortField` appears in the conditions with a single time window",
+      "N limits the objects selected per check, not per day",
+      "Ads applies the mode per rule per ad account",
+      "an object matched but not selected still does not fall through to later pipelines",
+      "Only `all_match` is allowed when any pipeline has no conditions or the rule uses `custom_close_other_ads`",
+      "It is never silently switched to `all_match`",
+      "`hit` only means the conditions are met",
+      "each target also carries `selected`",
+      "`matchModeNotSimulated: true`",
     ]) {
       expect(ads).toContain(required)
     }

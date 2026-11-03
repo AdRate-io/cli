@@ -38,7 +38,7 @@ adrate gmvmax campaigns budget --adv-id <id> --campaign-id <id> --mode <mode> --
 adrate gmvmax campaigns roas --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate rules options --rule-type <type> --scope <scope>
 adrate rules options --rule-type ads --scope material
-adrate rules list [--rule-type <type>] [--keyword <text>]
+adrate rules list [--rule-type <type>] [--scope <scope>] [--keyword <text>]
 adrate rules get --rule-id <id>
 adrate rules create (--file <rule.json> | --stdin)
 adrate rules update --rule-id <id> --file <patch.json>
@@ -53,6 +53,7 @@ adrate commands pending
 adrate commands resume --idempotency-key <key>
 adrate feedback --category blocked|bug|suggestion|other (--message <text> | --message-stdin)
 adrate skills list
+adrate skills status
 adrate skills read <name> [path]
 ```
 
@@ -125,7 +126,9 @@ The two Skills are fixed as `adrate-shared` and `adrate-ads`. `skills-content` h
 
 `adrate skills install` copies only allowlisted files from the current npm package into `~/.agents/skills/`, without network access or git. Before writing, it validates the Skill name, the frontmatter/manifest/openai schema, in-package digests, UTF-8, size, safe relative paths, and regular-file boundaries; writes use a temporary directory and atomic replacement. An older CLI never silently overwrites an installed Skill of a higher version.
 
-`skills list` and `skills read` require no authentication and make no network requests. At startup the CLI may surface missing or outdated installs through `_notice.skills`; setting `ADRATE_NO_SKILLS_NOTIFIER=1` disables that local check without affecting business exit codes.
+`skills list`, `skills read`, and `skills status` require no authentication and make no network requests. `skills status` is a read-only diagnostic: for each Skill it reports the bundled and installed versions, a state (`current`, `outdated`, `newer`, or `missing`), and whether this CLI meets the installed Skill's `minCliVersion`; it never writes.
+
+After every other command the CLI checks the local installs. A Skill that is already installed but older than the bundled one is upgraded in place automatically (same validation and atomic writes as `skills install`, never a downgrade), and one stderr line reports it. A missing Skill is never created automatically: the CLI only surfaces it through `_notice.skills` and asks for `adrate skills install`. Setting `ADRATE_NO_SKILLS_NOTIFIER=1` disables both the check and the automatic upgrade without affecting business exit codes.
 
 ## Windows boundaries
 

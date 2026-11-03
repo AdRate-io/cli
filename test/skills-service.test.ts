@@ -19,6 +19,12 @@ import { sha256SkillText } from "../src/skills/skill-contract.js"
 import { SkillsService } from "../src/skills/skills-service.js"
 import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 
+/** list / read 用例不触达 status，inspector 只为满足构造签名 */
+const UNUSED_INSPECTOR = {
+  inspector: { facts: () => Promise.reject(new Error("unused")) },
+  installedSkillsRoot: "/unused",
+}
+
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const roots: Array<string> = []
 
@@ -59,7 +65,7 @@ afterEach(async () => {
 describe("SkillsService", () => {
   it("lists only CLI Skills in stable name order with CLI version metadata", async () => {
     const root = await packageFixture()
-    const outcome = await new SkillsService(new SkillCatalog(root)).list()
+    const outcome = await new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR).list()
 
     expect(outcome.exitCode).toBe(0)
     expect(outcome.envelope).toStrictEqual({
@@ -68,13 +74,13 @@ describe("SkillsService", () => {
         skills: [
           {
             name: "adrate-ads",
-            version: "1.6.1",
+            version: "1.7.0",
             minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
           {
             name: "adrate-shared",
-            version: "1.6.1",
+            version: "1.7.0",
             minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
@@ -95,7 +101,7 @@ describe("SkillsService", () => {
 
   it("returns exact read fields and raw human stdout with one trailing newline", async () => {
     const root = await packageFixture()
-    const service = new SkillsService(new SkillCatalog(root))
+    const service = new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR)
     const outcome = await service.read({ name: "adrate-shared" })
     const expected = await readFile(
       join(root, "skills-content", "adrate-shared", "SKILL.md"),
@@ -105,7 +111,7 @@ describe("SkillsService", () => {
     if (outcome.envelope.ok) {
       expect(outcome.envelope.data).toStrictEqual({
         name: "adrate-shared",
-        version: "1.6.1",
+        version: "1.7.0",
         path: "SKILL.md",
         content: expected,
         sha256: sha256SkillText(expected),
@@ -130,7 +136,7 @@ describe("SkillsService", () => {
 
   it("renders list on stdout while JSON still emits exactly one envelope", async () => {
     const root = await packageFixture()
-    const outcome = await new SkillsService(new SkillCatalog(root)).list()
+    const outcome = await new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR).list()
     for (const json of [false, true]) {
       let stdout = ""
       let stderr = ""
@@ -155,7 +161,7 @@ describe("SkillsService", () => {
 
   it("maps unknown names and safe missing paths to usage without path disclosure", async () => {
     const root = await packageFixture()
-    const service = new SkillsService(new SkillCatalog(root))
+    const service = new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR)
     await expectFailure(
       service.read({ name: "not-installed" }),
       2,
@@ -175,7 +181,7 @@ describe("SkillsService", () => {
 
   it("maps absolute, traversal, Windows, UNC, and symlink escape to local safety", async () => {
     const root = await packageFixture()
-    const service = new SkillsService(new SkillCatalog(root))
+    const service = new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR)
     const outside = join(root, "outside.md")
     const outsideDirectory = join(root, "outside-directory")
     await writeFile(outside, "outside\n")
@@ -232,7 +238,7 @@ describe("SkillsService", () => {
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
     await expect(
-      new SkillsService(new SkillCatalog(root)).list()
+      new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR).list()
     ).resolves.toMatchObject({ exitCode: 0 })
   })
 
@@ -253,7 +259,7 @@ describe("SkillsService", () => {
     await writeFile(contentPath, content)
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
-    const outcome = await new SkillsService(new SkillCatalog(root)).read({
+    const outcome = await new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR).read({
       name: "adrate-ads",
     })
     expect(outcome.exitCode).toBe(0)
@@ -264,7 +270,7 @@ describe("SkillsService", () => {
 
   it("treats missing default content as bundled corruption but a missing extra file as usage", async () => {
     const root = await packageFixture()
-    const service = new SkillsService(new SkillCatalog(root))
+    const service = new SkillsService(new SkillCatalog(root), UNUSED_INSPECTOR)
     await unlink(join(root, "skills-content", "adrate-shared", "SKILL.md"))
 
     await expectFailure(

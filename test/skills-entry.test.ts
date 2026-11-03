@@ -52,6 +52,7 @@ function harness(notifier?: { inspect: () => Promise<never> }) {
     skills: {
       list: vi.fn(() => Promise.resolve(success("skills-list"))),
       read: vi.fn(() => Promise.resolve(success("skills-read"))),
+      status: vi.fn(() => Promise.resolve(success("skills-status"))),
     },
     skillsInstall: {
       install: vi.fn(() => Promise.resolve(success("skills-install"))),
@@ -161,6 +162,32 @@ describe("Skills parser and application entry", () => {
 
     expect(inspect).toHaveBeenCalledTimes(4)
     expect(invalid.outcome.exitCode).toBe(2)
+  })
+
+  it("allows auto-upgrade for every command except skills status and skills install", async () => {
+    const inspect = vi.fn(() =>
+      Promise.resolve({ notice: null, warning: null })
+    )
+    const value = harness({ inspect } as never)
+    await value.application.execute(["--version"])
+    await value.application.execute(["skills", "list"])
+    await value.application.execute(["unknown-command"])
+    await value.application.execute(["skills", "status"])
+    await value.application.execute(["skills", "install"])
+    // 解析失败 / 帮助路径同样按命令前缀判定：仍是只读诊断，不得写盘
+    await value.application.execute(["skills", "status", "--bogus"])
+    await value.application.execute(["--request-id", "r-1", "skills", "status", "--help"])
+
+    expect(inspect.mock.calls).toStrictEqual([
+      [{ autoUpgrade: true }],
+      [{ autoUpgrade: true }],
+      [{ autoUpgrade: true }],
+      [{ autoUpgrade: false }],
+      [{ autoUpgrade: false }],
+      [{ autoUpgrade: false }],
+      [{ autoUpgrade: false }],
+    ])
+    expect(value.commands.skills.status).toHaveBeenCalledTimes(1)
   })
 
   it("does not let a notifier exception change the core command result", async () => {
