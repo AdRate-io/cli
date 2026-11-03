@@ -2,6 +2,7 @@ import { lstat, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { IDEMPOTENCY_KEY_PATTERN } from "../constants.js"
 import {
+  SecureFileChangedError,
   SecureFileError,
   SecureFileLockBusyError,
 } from "../storage/secure-files.js"
@@ -89,7 +90,7 @@ export type PendingCommandPrepareResult =
     }
   | { kind: "unsafe"; scan: PendingCommandScanResult }
 
-export class PendingCommandChangedError extends SecureFileError {
+export class PendingCommandChangedError extends SecureFileChangedError {
   constructor() {
     super("The pending Command record changed during a local transaction.")
     this.name = "PendingCommandChangedError"

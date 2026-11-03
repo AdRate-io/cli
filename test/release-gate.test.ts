@@ -146,26 +146,26 @@ describe("publish workflow identity step", () => {
     )
     const command = identityStepCommand(workflow)
 
-    const stable = await identityRepositoryFixture("0.1.0")
+    const stable = await identityRepositoryFixture("0.2.0")
     const stableRun = await runIdentityStep(
-      resolveWorkflowExpressions(command, "v0.1.0"),
+      resolveWorkflowExpressions(command, "v0.2.0"),
       stable,
-      "v0.1.0"
+      "v0.2.0"
     )
     expect(stableRun.stderr).toBe("")
     expect(stableRun.output).toBe(
-      "version=0.1.0\nchannel=stable\ndist-tag=latest\n"
+      "version=0.2.0\nchannel=stable\ndist-tag=latest\n"
     )
 
-    const prerelease = await identityRepositoryFixture("0.1.0-beta.1")
+    const prerelease = await identityRepositoryFixture("0.2.0-beta.1")
     const prereleaseRun = await runIdentityStep(
-      resolveWorkflowExpressions(command, "v0.1.0-beta.1"),
+      resolveWorkflowExpressions(command, "v0.2.0-beta.1"),
       prerelease,
-      "v0.1.0-beta.1"
+      "v0.2.0-beta.1"
     )
     expect(prereleaseRun.stderr).toBe("")
     expect(prereleaseRun.output).toBe(
-      "version=0.1.0-beta.1\nchannel=prerelease\ndist-tag=next\n"
+      "version=0.2.0-beta.1\nchannel=prerelease\ndist-tag=next\n"
     )
   }, 30_000)
 
@@ -176,14 +176,14 @@ describe("publish workflow identity step", () => {
     )
     const resolved = resolveWorkflowExpressions(
       identityStepCommand(workflow),
-      "v0.1.0"
+      "v0.2.0"
     )
-    const fixture = await identityRepositoryFixture("0.1.0")
+    const fixture = await identityRepositoryFixture("0.2.0")
 
     const withoutChannel = resolved.replace(/ --channel "[^"]*"/, "")
     expect(withoutChannel).not.toContain("--channel")
     await expect(
-      runIdentityStep(withoutChannel, fixture, "v0.1.0")
+      runIdentityStep(withoutChannel, fixture, "v0.2.0")
     ).rejects.toMatchObject({
       code: 1,
       stderr: expect.stringContaining(
@@ -195,7 +195,7 @@ describe("publish workflow identity step", () => {
       runIdentityStep(
         resolved.replace(/ --channel "[^"]*"/, ' --channel "prerelease"'),
         fixture,
-        "v0.1.0"
+        "v0.2.0"
       )
     ).rejects.toMatchObject({
       code: 1,

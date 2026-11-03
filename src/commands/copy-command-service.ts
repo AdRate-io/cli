@@ -50,10 +50,37 @@ interface CopySubmitReceipt {
   }
 }
 
+/**
+ * 「服务端明确拒绝且证明未执行 → 改正后换新 key」一类的错误码。
+ *
+ * `AD_CREATION_QUOTA_EXCEEDED` 在下方有带额度数字的专用分支（优先命中），
+ * 这里同样登记只作兜底：万一专用分支被挪走或改序，它仍归入换新 key 一类，
+ * 不会掉到「retryable=false 的未知码」去建议原 key 重放。
+ */
 const CORRECT_THEN_NEW_KEY_CODES = new Set([
   "INVALID_REQUEST",
   "PLAN_LIMIT_EXCEEDED",
+  "AD_CREATION_QUOTA_EXCEEDED",
 ])
+
+/** 服务端额度诊断只在四个字段都可信时才拼进提示，缺一个就整段省略数字。 */
+function adCreationQuotaFigures(
+  details: Record<string, unknown>
+): string | null {
+  const requiredUnits = details.required
+  const remaining = details.remaining
+  const periodEndAt = details.periodEndAt
+  if (
+    !Number.isSafeInteger(requiredUnits) ||
+    !Number.isSafeInteger(remaining) ||
+    (periodEndAt !== null && typeof periodEndAt !== "string")
+  ) {
+    return null
+  }
+  const reset =
+    typeof periodEndAt === "string" ? `, resets at ${periodEndAt}` : ""
+  return ` (needs ${String(requiredUnits)}, ${String(remaining)} remaining${reset})`
+}
 
 function required(value: string | undefined, flag: string): string {
   if (value === undefined) throw usageFailure(`${flag} is required.`)
@@ -109,6 +136,12 @@ function confirmedSubmitWarning(
 ): string {
   if (envelope.error.code === "DAILY_QUOTA_EXCEEDED") {
     return `Daily quota exceeded; stop until the UTC day rolls over, then replay the exact original JSON body with idempotency key ${idempotencyKey}.`
+  }
+  // 创建额度是订阅周期额度，不是日额度：等下一个 UTC 日不会恢复，
+  // 而且这条拒绝证明没有任务被受理，所以归入"改正后换新 key"一类。
+  if (envelope.error.code === "AD_CREATION_QUOTA_EXCEEDED") {
+    const figures = adCreationQuotaFigures(envelope.error.details) ?? ""
+    return `Campaign creation quota exhausted for the current period${figures}; no Copy task was accepted. Add creation units or upgrade the plan, then submit with a new idempotency key; do not reuse ${idempotencyKey}.`
   }
   if (CORRECT_THEN_NEW_KEY_CODES.has(envelope.error.code)) {
     return `The server rejected this submit. Correct the validation or quota issue, then submit the corrected body with a new idempotency key; do not reuse ${idempotencyKey}.`

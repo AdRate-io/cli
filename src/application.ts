@@ -6,9 +6,13 @@ import {
   localRequestId,
   usageFailure,
 } from "./errors.js"
-import { helpText, parseArguments } from "./parser.js"
+import { GLOBAL_VALUE_FLAGS, helpText, parseArguments } from "./parser.js"
 import { withSkillsNotifierInspection } from "./skills/skills-notifier.js"
-import { SecureFileLockBusyError } from "./storage/secure-files.js"
+import {
+  SecureFileChangedError,
+  SecureFileError,
+  SecureFileLockBusyError,
+} from "./storage/secure-files.js"
 import type { AuthService } from "./auth/auth-service.js"
 import type { ReadCommandService } from "./commands/read-service.js"
 import type { CommandQueryService } from "./commands/command-query-service.js"
@@ -49,7 +53,7 @@ export interface CliCommandServices {
     RuleCommandService,
     "create" | "update" | "enable" | "disable" | "delete" | "dryRun"
   >
-  skills: Pick<SkillsService, "list" | "read">
+  skills: Pick<SkillsService, "list" | "read" | "status">
   skillsInstall: Pick<SkillsInstallService, "install">
 }
 
@@ -65,13 +69,18 @@ export class CliApplication {
     argv: ReadonlyArray<string>,
     output?: CliExecutionOutput
   ): Promise<CliExecution> {
-    const execution = await this.executeCommand(argv, output)
+    const execution = await this.executeCommand(
+      argv,
+      output
+    )
     let outcome = execution.outcome
     if (this.skillsNotifier) {
       try {
         outcome = withSkillsNotifierInspection(
           outcome,
-          await this.skillsNotifier.inspect()
+          await this.skillsNotifier.inspect({
+            autoUpgrade: allowsSkillsAutoUpgrade(argv),
+          })
         )
       } catch {
         outcome = withSkillsNotifierInspection(outcome, {
@@ -298,6 +307,9 @@ export class CliApplication {
         case "skills.list":
           outcome = await this.commands.skills.list()
           break
+        case "skills.status":
+          outcome = await this.commands.skills.status()
+          break
         case "skills.read":
           outcome = await this.commands.skills.read({
             name: invocation.command.name,
@@ -332,17 +344,7 @@ export class CliApplication {
         verbose,
       }
     } catch (error) {
-      const failure =
-        error instanceof CliFailure
-          ? error
-          : error instanceof SecureFileLockBusyError
-            ? dependencyFailure(
-                "Another AdRate CLI process is updating local state; retry shortly."
-              )
-            : dependencyFailure(
-                "The CLI encountered an unexpected local failure.",
-                EXIT_CODE.business
-              )
+      const failure = toLocalFailure(error)
       return {
         json,
         verbose,
@@ -357,4 +359,65 @@ export class CliApplication {
       }
     }
   }
+}
+
+/**
+ * 命令执行后是否允许自动升级过期的已安装 Skill：
+ * - `skills status` 是只读诊断，必须如实反映升级前状态，不写盘
+ * - `skills install` 自身已完成安装，无需再升级
+ * 其余命令（含 --version / --help / 解析失败）都允许——Skill 壳要求 Agent 先跑 `adrate --version`
+ *
+ * 按 argv 的命令前缀判定而非解析结果：`skills status --bogus`、`skills status --help` 这类解析失败 / 帮助路径
+ * 拿不到 commandKind，但用户意图仍是只读诊断，同样不得写盘。
+ */
+function allowsSkillsAutoUpgrade(argv: ReadonlyArray<string>): boolean {
+  const positional: Array<string> = []
+  let skipValue = false
+  for (const token of argv) {
+    if (skipValue) {
+      skipValue = false
+      continue
+    }
+    if (token.startsWith("-")) {
+      // 全局取值参数（--request-id x）跳过其值；--flag=value 形式自身已含值
+      skipValue = GLOBAL_VALUE_FLAGS.includes(token)
+      continue
+    }
+    positional.push(token)
+    if (positional.length === 2) break
+  }
+  return !(
+    positional[0] === "skills" &&
+    (positional[1] === "status" || positional[1] === "install")
+  )
+}
+
+/**
+ * 统一异常兜底：本地状态文件错误按「重试能否改变结果」分流。
+ * - 锁繁忙 / 并发改动：瞬态，可重试
+ * - 其余 SecureFileError（symlink、权限、owner、过大等）：持久性，不可重试，但透出具体原因
+ *   （文案均为静态字符串，不含路径或凭据）便于用户自行修复
+ */
+function toLocalFailure(error: unknown): CliFailure {
+  if (error instanceof CliFailure) return error
+  if (error instanceof SecureFileLockBusyError) {
+    return dependencyFailure(
+      "Another AdRate CLI process is updating local state; retry shortly."
+    )
+  }
+  if (error instanceof SecureFileChangedError) {
+    return dependencyFailure(
+      "A local state file changed while it was being verified; retry the command."
+    )
+  }
+  if (error instanceof SecureFileError) {
+    return dependencyFailure(
+      `A local state file failed a safety check: ${error.message}`,
+      EXIT_CODE.business
+    )
+  }
+  return dependencyFailure(
+    "The CLI encountered an unexpected local failure.",
+    EXIT_CODE.business
+  )
 }

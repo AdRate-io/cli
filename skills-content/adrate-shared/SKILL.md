@@ -46,6 +46,8 @@ For `RATE_LIMITED`, `UPSTREAM_RATE_LIMITED`, or `DEPENDENCY_UNAVAILABLE`, honor 
 
 For `DAILY_QUOTA_EXCEEDED`, stop immediately. It may use HTTP 429, but it is a daily stop condition, not an invitation to loop.
 
+`AD_CREATION_QUOTA_EXCEEDED` is the subscription period's campaign creation quota, not the daily one. Waiting does not restore it, so stop and report the `required`, `remaining`, and `periodEndAt` values from `error.details`.
+
 `RESOURCE_BUSY` means another request already holds the write lock for that resource. It is retryable with a short Retry-After. Keep the original idempotency key and retry; do not mint a new key and do not assume the first request failed. Concurrent submissions that share one key reach this error rather than an immediate receipt hit, because the lock is held across the whole snapshot fetch.
 
 ## 6. Use one idempotency key for one immutable write
@@ -66,7 +68,7 @@ Never generate a new key to repeat the same write after any of these outcomes.
 
 Receipt-backed Rule writes do not create a local pending journal. Use the operation namespace `rule-create-*`, `rule-update-*`, `rule-enable-*`, `rule-disable-*`, or `rule-delete-*`; Rule dry run has no key. On a confirmed non-retryable rejection that proves no mutation ran, correct each returned `validationErrors` item or resolve the stated business constraint, then retry with a new key. On a network failure, timeout, invalid response, or lost response, replay the exact request with the original key. `duplicate: true` is the original receipt and proves that no second mutation ran. `commands get`, `commands pending`, and `commands resume` do not apply to Rule writes.
 
-Receipt-backed Campaign Copy submit also has no Command pending journal. On a network failure, timeout, invalid response, or lost response, replay the exact original file body with the original key. An explicit `INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED` rejection proves that no Copy task was accepted; correct the cause and submit the corrected body with a new key. `commands get`, `commands pending`, and `commands resume` do not apply to Campaign Copy submit.
+Receipt-backed Campaign Copy submit also has no Command pending journal. On a network failure, timeout, invalid response, or lost response, replay the exact original file body with the original key. An explicit `INVALID_REQUEST`, `DAILY_QUOTA_EXCEEDED`, or `PLAN_LIMIT_EXCEEDED` rejection proves that no Copy task was accepted; correct the cause and submit the corrected body with a new key. `AD_CREATION_QUOTA_EXCEEDED` proves the same thing: no Copy task was accepted, so add creation units or upgrade the plan and submit with a new key rather than replaying the original one. `commands get`, `commands pending`, and `commands resume` do not apply to Campaign Copy submit.
 
 ## 7. Interpret exit 5 by operation type
 

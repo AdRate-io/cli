@@ -76,7 +76,7 @@ describe("SkillsInstallService", () => {
       ])
       for (const skill of skills) {
         expect(skill.status).toBe("installed")
-        expect(skill.version).toBe("1.6.1")
+        expect(skill.version).toBe("1.7.0")
       }
     }
     expect(outcome.humanOutput).toMatchObject({
@@ -135,7 +135,7 @@ describe("SkillsInstallService", () => {
       "skill-manifest.json"
     )
     const shell = (await readFile(shellPath, "utf8")).replace(
-      'version: "1.6.1"',
+      'version: "1.7.0"',
       'version: "2.0.0"'
     )
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
@@ -439,6 +439,38 @@ describe("SkillsInstallService", () => {
       expect((await lstat(path)).mode & 0o7777).toBe(0o700)
     }
     expect((await lstat(shellPath)).mode & 0o7777).toBe(0o600)
+  })
+
+  it("keeps version files old when a write fails mid-install (manifest is written last)", async () => {
+    const { installedRoot, service } = await fixture()
+    await service.install()
+    const skillDir = join(installedRoot, "adrate-shared")
+    const shellPath = join(skillDir, "SKILL.md")
+    const manifestPath = join(skillDir, "skill-manifest.json")
+    // 模拟已安装旧版本
+    const shell = (await readFile(shellPath, "utf8")).replace(
+      'version: "1.7.0"',
+      'version: "0.9.0"'
+    )
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      version: string
+      shellSha256: string
+    }
+    manifest.version = "0.9.0"
+    manifest.shellSha256 = sha256SkillText(shell)
+    await writeFile(shellPath, shell)
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    // openai.yaml 位置换成目录 → 该文件写入失败
+    const openAiPath = join(skillDir, "agents", "openai.yaml")
+    await rm(openAiPath)
+    await mkdir(openAiPath)
+
+    await expect(service.install()).rejects.toThrow()
+
+    // 版本文件未被半途更新：状态仍判 outdated，下次命令会继续升级
+    await expect(readFile(shellPath, "utf8")).resolves.toContain('version: "0.9.0"')
+    const after = JSON.parse(await readFile(manifestPath, "utf8")) as { version: string }
+    expect(after.version).toBe("0.9.0")
   })
 
   it("cleans up temp file when rename fails on a directory target", async () => {

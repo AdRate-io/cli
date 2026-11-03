@@ -15,7 +15,7 @@ import {
   isValidDeviceCode,
   isValidUserCode,
 } from "../contracts/oauth.js"
-import type { CliEnvironment, CLI_CAPABILITIES } from "../constants.js"
+import type { CLI_CAPABILITIES, CliEnvironment } from "../constants.js"
 
 export interface CliConfig {
   configFormatVersion: 1
@@ -319,7 +319,7 @@ export function parseDeviceIssueReservation(
   return {
     formatVersion: 1,
     generation: String(value.generation),
-    environment: value.environment as CliEnvironment,
+    environment: value.environment,
     issuerOrigin: String(value.issuerOrigin),
     clientInstanceId: String(value.clientInstanceId),
     deviceName: value.deviceName,

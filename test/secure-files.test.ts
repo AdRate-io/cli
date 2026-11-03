@@ -17,6 +17,7 @@ import { Buffer } from "node:buffer"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
+  SecureFileChangedError,
   SecureFileError,
   SecureFileLockBusyError,
   SecureFileSystem,
@@ -117,7 +118,7 @@ describePosix("SecureFileSystem POSIX security boundary", () => {
       testHooks: { afterReadFileOpened: () => truncate(truncated, 1) },
     })
     await expect(truncating.readSecureFile(truncated)).rejects.toThrow(
-      "changed while it was being read"
+      SecureFileChangedError
     )
 
     const replaced = join(fixture.root, "replaced")
@@ -132,7 +133,7 @@ describePosix("SecureFileSystem POSIX security boundary", () => {
       },
     })
     await expect(replacing.readSecureFile(replaced)).rejects.toThrow(
-      "changed while it was being read"
+      SecureFileChangedError
     )
   })
 
@@ -149,7 +150,7 @@ describePosix("SecureFileSystem POSIX security boundary", () => {
     })
 
     await expect(racing.readSecureFile(target)).rejects.toThrow(
-      "changed while it was being read"
+      SecureFileChangedError
     )
   })
 
@@ -359,7 +360,6 @@ describePosix("SecureFileSystem POSIX security boundary", () => {
     await expect(state.readConfig()).rejects.toThrow("not valid UTF-8")
   })
 })
-
 
 describePosix("SecureFileSystem minimal local lock", () => {
   it("serializes concurrent owners and releases the lock after completion", async () => {

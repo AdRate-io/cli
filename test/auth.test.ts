@@ -15,8 +15,7 @@ import { CredentialStore } from "../src/storage/credential-backend.js"
 import { createCliPaths } from "../src/storage/paths.js"
 import { SecureFileSystem } from "../src/storage/secure-files.js"
 import { CliStateStore } from "../src/storage/state-store.js"
-import { CliFailure } from "../src/errors.js"
-import type { CliOutcome } from "../src/errors.js"
+import type { CliFailure, CliOutcome } from "../src/errors.js"
 import type {
   HttpRequest,
   HttpResponse,
@@ -418,7 +417,7 @@ async function installStoredCredential(
         deviceName: "test-device",
         clientInstanceId: index.clientInstanceId,
         loggedInAt: index.tokenReceivedAt,
-        cliVersion: "0.1.0",
+        cliVersion: "0.2.0",
         absoluteExpiresAt: "2026-08-30T02:00:00.000Z",
       })
     }
@@ -581,7 +580,7 @@ describe("Device Authorization", () => {
             deviceName: "Boss-Mac",
             clientInstanceId: CLIENT_INSTANCE_ID,
             loggedInAt: "2026-07-31T02:00:00.000Z",
-            cliVersion: "0.1.0",
+            cliVersion: "0.2.0",
           })
         )
       }

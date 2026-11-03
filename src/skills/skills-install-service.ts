@@ -34,9 +34,20 @@ const ALLOWED_SKILL_FILES = Object.freeze([
 ] as const)
 
 type AllowedSkillFile = (typeof ALLOWED_SKILL_FILES)[number]
+
+/**
+ * 写盘顺序：带版本号的两份文件最后写，`skill-manifest.json` 收尾充当提交标记。
+ * 安装状态只由 SKILL.md 与 manifest 的版本判定（任一落后即 outdated），中途写失败时
+ * manifest 仍是旧版本 → 保持 outdated，下次命令继续升级，不会把半安装报成升级成功。
+ */
+const SKILL_FILE_WRITE_ORDER: ReadonlyArray<AllowedSkillFile> = Object.freeze([
+  "agents/openai.yaml",
+  "SKILL.md",
+  "skill-manifest.json",
+])
 type ValidatedSourceFiles = Readonly<Record<AllowedSkillFile, ReadSkillFile>>
 
-interface InstallResult {
+export interface InstallResult {
   name: string
   version: string
   status: "installed" | "updated" | "unchanged"
@@ -148,6 +159,19 @@ async function writeFileSecure(
   }
 }
 
+/** 路径存在且是真实目录（非 symlink）才返回 true；ENOENT 返回 false，其余错误上抛 */
+async function isExistingDirectory(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path)
+    return info.isDirectory() && !info.isSymbolicLink()
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false
+    }
+    throw error
+  }
+}
+
 async function assertDirectoryNotReplaced(dirPath: string): Promise<void> {
   const info = await lstat(dirPath)
   if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -206,6 +230,30 @@ export class SkillsInstallService {
         value: summary,
       },
     }
+  }
+
+  /**
+   * 自动升级入口（SkillsNotifier 在检测到 outdated 时调用）：只处理「已安装」的 Skill。
+   *
+   * 首次安装必须由用户显式执行 `adrate skills install`（不悄悄往用户 home 写新目录），
+   * 所以安装根目录或某个 Skill 目录不存在时直接跳过，绝不创建。
+   * 其余校验、原子写入与「不降级更高版本」完全复用 installSkill。
+   */
+  async upgradeInstalled(
+    names: ReadonlyArray<SkillName>
+  ): Promise<ReadonlyArray<InstallResult>> {
+    if (!(await isExistingDirectory(this.options.installedSkillsRoot))) {
+      return []
+    }
+    await assertSafeInstallTarget(this.options.installedSkillsRoot)
+    const results: Array<InstallResult> = []
+    for (const name of SKILL_NAMES) {
+      if (!names.includes(name)) continue
+      const targetDir = join(this.options.installedSkillsRoot, name)
+      if (!(await isExistingDirectory(targetDir))) continue
+      results.push(await this.installSkill(name))
+    }
+    return results
   }
 
   private async installSkill(name: SkillName): Promise<InstallResult> {
@@ -300,7 +348,7 @@ export class SkillsInstallService {
       return { name, version: existing.version, status: "unchanged" }
     }
 
-    for (const relativePath of ALLOWED_SKILL_FILES) {
+    for (const relativePath of SKILL_FILE_WRITE_ORDER) {
       const fileContent = sourceFiles[relativePath]
       const targetPath = join(targetDir, ...relativePath.split("/"))
       const resolvedTarget = resolve(targetPath)

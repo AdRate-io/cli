@@ -327,7 +327,6 @@ export interface PublicResponse {
 
 function assertPublicRequestContract(input: PublicRequestInput): void {
   // TypeScript 调用方受联合类型约束；运行时校验仍需覆盖 JavaScript 和未检查的外部调用。
-  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
   if (
     input.method === "POST" &&
     !(
@@ -355,7 +354,6 @@ function assertPublicRequestContract(input: PublicRequestInput): void {
       "The Public API write request is invalid."
     )
   }
-  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 }
 
 export class PublicHttpClient {

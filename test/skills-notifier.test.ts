@@ -6,13 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createLocalSuccess } from "../src/contracts/envelope.js"
 import { renderOutcome } from "../src/output.js"
 import { SkillCatalog } from "../src/skills/skill-catalog.js"
+import { SkillsInstallService } from "../src/skills/skills-install-service.js"
+import { SkillsService } from "../src/skills/skills-service.js"
+import { CLI_VERSION } from "../src/constants.js"
 import { sha256SkillText } from "../src/skills/skill-contract.js"
-import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 import {
   SkillsNotifier,
   withSkillsNotifierInspection,
 } from "../src/skills/skills-notifier.js"
 import { replaceLocalNotice } from "../src/notices/notice-merge.js"
+import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 import type { CliOutcome } from "../src/errors.js"
 import type { JsonObject } from "../src/contracts/json.js"
 
@@ -44,6 +47,33 @@ function notifier(installed: string, environment: NodeJS.ProcessEnv = {}) {
     installedSkillsRoot: installed,
     environment,
   })
+}
+
+function upgradingNotifier(
+  installed: string,
+  upgrader?: ConstructorParameters<typeof SkillsNotifier>[0]["upgrader"]
+) {
+  const catalog = new SkillCatalog(CLI_ROOT)
+  return new SkillsNotifier({
+    catalog,
+    installedSkillsRoot: installed,
+    environment: {},
+    upgrader:
+      upgrader ??
+      new SkillsInstallService(catalog, {
+        packageRoot: CLI_ROOT,
+        installedSkillsRoot: installed,
+      }),
+  })
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await readFile(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function changeVersion(
@@ -121,12 +151,12 @@ describe("SkillsNotifier", () => {
       required: [
         {
           name: "adrate-shared",
-          version: "1.6.1",
+          version: "1.7.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
         {
           name: "adrate-ads",
-          version: "1.6.1",
+          version: "1.7.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
       ],
@@ -195,7 +225,7 @@ describe("SkillsNotifier", () => {
     await writeFile(
       sharedShell,
       (await readFile(sharedShell, "utf8")).replace(
-        'version: "1.6.1"',
+        'version: "1.7.0"',
         "version: true"
       )
     )
@@ -374,5 +404,200 @@ describe("SkillsNotifier", () => {
       environment: {},
     }).inspect()
     expect(inspection).toStrictEqual({ notice: null, warning: null })
+  })
+
+  describe("auto-upgrade of installed but outdated Skills", () => {
+    it("upgrades outdated installs in place, re-verifies, and leaves no notice", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+
+      const inspection = await upgradingNotifier(installed).inspect({
+        autoUpgrade: true,
+      })
+
+      expect(inspection.notice).toBeNull()
+      expect(inspection.warning).toMatch(
+        /^AdRate Agent Skills were updated automatically \(adrate-ads 0\.9\.0 -> \d+\.\d+\.\d+\)\.$/
+      )
+      const facts = await notifier(installed).facts()
+      expect(facts.map((fact) => fact.state)).toStrictEqual([
+        "current",
+        "current",
+      ])
+      expect(await readFile(join(installed, "adrate-ads", "SKILL.md"), "utf8")).toBe(
+        await readFile(join(CLI_ROOT, "skills", "adrate-ads", "SKILL.md"), "utf8")
+      )
+    })
+
+    it("never creates a missing Skill while upgrading the outdated one", async () => {
+      const { installed } = await fixture()
+      await install(installed, "adrate-ads")
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+
+      const inspection = await upgradingNotifier(installed).inspect({
+        autoUpgrade: true,
+      })
+
+      expect(await exists(join(installed, "adrate-shared", "SKILL.md"))).toBe(
+        false
+      )
+      expect(inspection.notice?.issues).toStrictEqual([
+        { name: "adrate-shared", code: "missing", installedVersion: null },
+      ])
+      expect(inspection.warning).toContain("updated automatically (adrate-ads 0.9.0 ->")
+      expect(inspection.warning).toContain("adrate-shared: missing")
+    })
+
+    it("does not write anything when auto-upgrade is not allowed", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+      const upgradeInstalled = vi.fn()
+
+      const inspection = await upgradingNotifier(installed, {
+        upgradeInstalled,
+      }).inspect({ autoUpgrade: false })
+
+      expect(upgradeInstalled).not.toHaveBeenCalled()
+      expect(inspection.notice?.issues).toStrictEqual([
+        { name: "adrate-ads", code: "outdated", installedVersion: "0.9.0" },
+      ])
+    })
+
+    it("falls back to the explicit outdated notice when the upgrade fails", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+
+      const inspection = await upgradingNotifier(installed, {
+        upgradeInstalled: vi.fn(() => Promise.reject(new Error("disk full"))),
+      }).inspect({ autoUpgrade: true })
+
+      expect(inspection.notice?.issues).toStrictEqual([
+        { name: "adrate-ads", code: "outdated", installedVersion: "0.9.0" },
+      ])
+      expect(inspection.warning).not.toContain("updated automatically")
+    })
+
+    it("does not claim success when the upgrader returns but files are still outdated", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+
+      const inspection = await upgradingNotifier(installed, {
+        upgradeInstalled: vi.fn(() => Promise.resolve([])),
+      }).inspect({ autoUpgrade: true })
+
+      expect(inspection.warning).not.toContain("updated automatically")
+      expect(inspection.notice?.issues[0]?.code).toBe("outdated")
+    })
+
+    it("never downgrades a newer install", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "99.0.0")
+      const upgradeInstalled = vi.fn()
+
+      const inspection = await upgradingNotifier(installed, {
+        upgradeInstalled,
+      }).inspect({ autoUpgrade: true })
+
+      expect(upgradeInstalled).not.toHaveBeenCalled()
+      expect(inspection).toStrictEqual({ notice: null, warning: null })
+      expect((await notifier(installed).facts())[1]).toMatchObject({
+        name: "adrate-ads",
+        installedVersion: "99.0.0",
+        state: "newer",
+      })
+    })
+  })
+
+  describe("skills status", () => {
+    function statusService(installed: string) {
+      return new SkillsService(new SkillCatalog(CLI_ROOT), {
+        inspector: notifier(installed),
+        installedSkillsRoot: installed,
+      })
+    }
+
+    it("reports every state read-only and never writes", async () => {
+      const { installed } = await fixture()
+      await install(installed, "adrate-ads")
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+      const before = await readFile(
+        join(installed, "adrate-ads", "SKILL.md"),
+        "utf8"
+      )
+
+      const outcome = await statusService(installed).status()
+
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.envelope).toMatchObject({
+        ok: true,
+        data: {
+          installedSkillsRoot: installed,
+          suggestedAction: "install_skills",
+          command: "adrate skills install",
+          skills: [
+            {
+              name: "adrate-shared",
+              installedVersion: null,
+              installedMinCliVersion: null,
+              state: "missing",
+              cliCompatible: null,
+            },
+            {
+              name: "adrate-ads",
+              installedVersion: "0.9.0",
+              state: "outdated",
+              cliCompatible: true,
+            },
+          ],
+        },
+      })
+      expect(
+        await readFile(join(installed, "adrate-ads", "SKILL.md"), "utf8")
+      ).toBe(before)
+      expect(await exists(join(installed, "adrate-shared", "SKILL.md"))).toBe(
+        false
+      )
+    })
+
+    it("flags a newer install whose minCliVersion this CLI does not meet", async () => {
+      const { installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "99.0.0")
+      const shellPath = join(installed, "adrate-ads", "SKILL.md")
+      await writeFile(
+        shellPath,
+        (await readFile(shellPath, "utf8")).replace(
+          /minCliVersion: "[^"]+"/,
+          'minCliVersion: "99.0.0"'
+        )
+      )
+
+      const outcome = await statusService(installed).status()
+
+      expect(outcome.envelope).toMatchObject({
+        data: {
+          suggestedAction: null,
+          command: null,
+          skills: [
+            { name: "adrate-shared", state: "current", cliCompatible: true },
+            {
+              name: "adrate-ads",
+              state: "newer",
+              installedMinCliVersion: "99.0.0",
+              cliCompatible: false,
+            },
+          ],
+        },
+      })
+      expect(outcome.humanOutput).toMatchObject({
+        value: expect.stringContaining("newer (requires CLI 99.0.0)"),
+      })
+      expect(CLI_VERSION).not.toBe("99.0.0")
+    })
   })
 })

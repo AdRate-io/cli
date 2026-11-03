@@ -81,6 +81,7 @@ export type ParsedCommand =
   | {
       kind: "rules.list"
       ruleType?: string
+      scope?: string
       keyword?: string
       page?: string
       pageSize?: string
@@ -152,6 +153,7 @@ export type ParsedCommand =
     }
   | { kind: "skills.list" }
   | { kind: "skills.install" }
+  | { kind: "skills.status" }
   | { kind: "skills.read"; name?: string; path?: string }
 
 export type ReadCommand = Extract<
@@ -227,7 +229,7 @@ const GLOBAL_BOOLEAN_FLAGS: ReadonlyArray<string> = [
   "--help",
   "--version",
 ]
-const GLOBAL_VALUE_FLAGS: ReadonlyArray<string> = [
+export const GLOBAL_VALUE_FLAGS: ReadonlyArray<string> = [
   "--request-id",
   "--idempotency-key",
 ]
@@ -772,21 +774,25 @@ without human-language labels; metric keys are self-descriptive.`,
   },
   {
     key: "rules list",
-    valueFlags: ["--rule-type", "--keyword", "--page", "--page-size"],
+    valueFlags: ["--rule-type", "--scope", "--keyword", "--page", "--page-size"],
     positional: { prefix: ["rules", "list"], maximum: 2 },
     parse: (ctx) => ({
       kind: "rules.list",
       ruleType: stringFlag(ctx.flags, "--rule-type"),
+      scope: stringFlag(ctx.flags, "--scope"),
       keyword: stringFlag(ctx.flags, "--keyword"),
       page: stringFlag(ctx.flags, "--page"),
       pageSize: stringFlag(ctx.flags, "--page-size"),
     }),
     helpTopic: "rules list",
-    helpText: `Usage: adrate rules list [--rule-type ads|gmv_max_product|gmv_max_live] [--keyword <text>] [--page <n>] [--page-size <1..100>]
+    helpText: `Usage: adrate rules list [--rule-type ads|gmv_max_product|gmv_max_live] [--scope <scope>] [--keyword <text>] [--page <n>] [--page-size <1..100>]
 
 Lists automation rules with optional filters. Both Ads and GMV Max rule types
 are supported, including Ads rules whose server-provided scope is material.
-The response includes recent execution statistics.`,
+--scope filters by rule scope (campaign, adgroup, ad, material, product,
+creative, live_room); the server rejects unknown scopes. Without --rule-type,
+--scope matches every rule type with that scope, so add --rule-type ads to list
+only Ads campaign rules. The response includes recent execution statistics.`,
     globalHelpLine: "  rules list                       List automation rules",
   },
   {
@@ -1142,7 +1148,9 @@ Server redaction is only a fallback and cannot prove that a message is safe.`,
 
 Copies both bundled AdRate CLI Agent Skills from the installed npm package to
 ~/.agents/skills/<name>/. Zero network, zero git. Existing files are overwritten
-only when version or content differs. Safe to run repeatedly.`,
+only when version or content differs. Safe to run repeatedly. First-time
+installation always requires this command; once installed, an outdated Skill is
+upgraded automatically the next time any other command runs.`,
     globalHelpLine:
       "  skills install                    Install Agent Skills locally (no git)",
   },
@@ -1157,6 +1165,23 @@ Lists the two bundled AdRate CLI Agent Skills in stable name order. This local c
 does not read credentials.`,
     globalHelpLine:
       "  skills list                       List bundled Agent Skills",
+  },
+  {
+    key: "skills status",
+    positional: { prefix: ["skills", "status"], maximum: 2 },
+    parse: () => ({ kind: "skills.status" }),
+    helpTopic: "skills status",
+    helpText: `Usage: adrate skills status
+
+Read-only diagnostic of the locally installed Agent Skills in ~/.agents/skills/.
+For each bundled Skill it reports the bundled version, the installed version,
+and a state: current, outdated, newer (installed by a newer CLI and never
+downgraded), or missing. cliCompatible tells whether this CLI satisfies the
+installed Skill's minCliVersion. It never installs or upgrades anything and
+does not read credentials. Other commands upgrade outdated installs
+automatically; missing Skills still need adrate skills install.`,
+    globalHelpLine:
+      "  skills status                     Diagnose installed Agent Skills (read-only)",
   },
   {
     key: "skills read",

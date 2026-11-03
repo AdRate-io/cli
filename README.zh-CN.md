@@ -38,7 +38,7 @@ adrate gmvmax campaigns budget --adv-id <id> --campaign-id <id> --mode <mode> --
 adrate gmvmax campaigns roas --adv-id <id> --campaign-id <id> --mode <mode> --value <value> --auth-id <id>
 adrate rules options --rule-type <type> --scope <scope>
 adrate rules options --rule-type ads --scope material
-adrate rules list [--rule-type <type>] [--keyword <text>]
+adrate rules list [--rule-type <type>] [--scope <scope>] [--keyword <text>]
 adrate rules get --rule-id <id>
 adrate rules create (--file <rule.json> | --stdin)
 adrate rules update --rule-id <id> --file <patch.json>
@@ -53,6 +53,7 @@ adrate commands pending
 adrate commands resume --idempotency-key <key>
 adrate feedback --category blocked|bug|suggestion|other (--message <text> | --message-stdin)
 adrate skills list
+adrate skills status
 adrate skills read <name> [path]
 ```
 
@@ -125,7 +126,9 @@ preview 不携带 idempotency key，不使用 receipt、Command 或本地 pendin
 
 `adrate skills install` 只从当前 npm 包复制固定白名单内的文件到 `~/.agents/skills/`，不联网、不调用 git。安装前会校验 Skill 名称、frontmatter/manifest/openai schema、包内摘要、UTF-8、大小、安全相对路径和普通文件边界；写入使用临时目录与原子替换。旧 CLI 不会静默覆盖版本更高的已安装 Skill。
 
-`skills list/read` 不需要认证且不发网络请求。CLI 启动时可以通过 `_notice.skills` 提示缺失或需要更新的安装项；设置 `ADRATE_NO_SKILLS_NOTIFIER=1` 可关闭这项本地检查，不影响业务退出码。
+`skills list/read/status` 不需要认证且不发网络请求。`skills status` 是只读诊断：逐项列出包内版本、已安装版本、状态（`current` / `outdated` / `newer` / `missing`）以及当前 CLI 是否满足已安装 Skill 的 `minCliVersion`，不写任何文件。
+
+执行其他命令后，CLI 会检查本地安装：已安装但版本低于包内的 Skill 会就地自动升级（与 `skills install` 相同的校验和原子写入，绝不降级），并在 stderr 附一行说明；缺失的 Skill 永远不会被自动创建，只通过 `_notice.skills` 提示执行 `adrate skills install`。设置 `ADRATE_NO_SKILLS_NOTIFIER=1` 可同时关闭检查与自动升级，不影响业务退出码。
 
 ## Windows 边界
 
