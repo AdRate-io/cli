@@ -91,7 +91,7 @@ function harness(options: {
       readStdin: options.readStdin ?? (() => Promise.resolve("stdin message")),
       environment: { ADRATE_NO_CREDENTIAL_NOTIFIER: "1" },
       clientMetadata: {
-        cliVersion: "0.2.0-beta.6",
+        cliVersion: "0.2.1-beta.6",
         platform: "darwin-arm64",
         nodeVersion: "v22.20.0",
       },
@@ -133,7 +133,7 @@ describe("FeedbackCommandService", () => {
       json: {
         category: "bug",
         message: "quotes '$()'\n--literal",
-        cliVersion: "0.2.0-beta.6",
+        cliVersion: "0.2.1-beta.6",
         platform: "darwin-arm64",
         nodeVersion: "v22.20.0",
       },

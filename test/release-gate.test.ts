@@ -146,26 +146,26 @@ describe("publish workflow identity step", () => {
     )
     const command = identityStepCommand(workflow)
 
-    const stable = await identityRepositoryFixture("0.2.0")
+    const stable = await identityRepositoryFixture("0.2.1")
     const stableRun = await runIdentityStep(
-      resolveWorkflowExpressions(command, "v0.2.0"),
+      resolveWorkflowExpressions(command, "v0.2.1"),
       stable,
-      "v0.2.0"
+      "v0.2.1"
     )
     expect(stableRun.stderr).toBe("")
     expect(stableRun.output).toBe(
-      "version=0.2.0\nchannel=stable\ndist-tag=latest\n"
+      "version=0.2.1\nchannel=stable\ndist-tag=latest\n"
     )
 
-    const prerelease = await identityRepositoryFixture("0.2.0-beta.1")
+    const prerelease = await identityRepositoryFixture("0.2.1-beta.1")
     const prereleaseRun = await runIdentityStep(
-      resolveWorkflowExpressions(command, "v0.2.0-beta.1"),
+      resolveWorkflowExpressions(command, "v0.2.1-beta.1"),
       prerelease,
-      "v0.2.0-beta.1"
+      "v0.2.1-beta.1"
     )
     expect(prereleaseRun.stderr).toBe("")
     expect(prereleaseRun.output).toBe(
-      "version=0.2.0-beta.1\nchannel=prerelease\ndist-tag=next\n"
+      "version=0.2.1-beta.1\nchannel=prerelease\ndist-tag=next\n"
     )
   }, 30_000)
 
@@ -176,14 +176,14 @@ describe("publish workflow identity step", () => {
     )
     const resolved = resolveWorkflowExpressions(
       identityStepCommand(workflow),
-      "v0.2.0"
+      "v0.2.1"
     )
-    const fixture = await identityRepositoryFixture("0.2.0")
+    const fixture = await identityRepositoryFixture("0.2.1")
 
     const withoutChannel = resolved.replace(/ --channel "[^"]*"/, "")
     expect(withoutChannel).not.toContain("--channel")
     await expect(
-      runIdentityStep(withoutChannel, fixture, "v0.2.0")
+      runIdentityStep(withoutChannel, fixture, "v0.2.1")
     ).rejects.toMatchObject({
       code: 1,
       stderr: expect.stringContaining(
@@ -195,7 +195,7 @@ describe("publish workflow identity step", () => {
       runIdentityStep(
         resolved.replace(/ --channel "[^"]*"/, ' --channel "prerelease"'),
         fixture,
-        "v0.2.0"
+        "v0.2.1"
       )
     ).rejects.toMatchObject({
       code: 1,
@@ -210,16 +210,17 @@ describe("release identity", () => {
   it("rejects tag/version/channel inconsistencies", () => {
     expect(() =>
       validateReleaseIdentity({
-        version: "0.2.0-beta.1",
-        tag: "v0.2.0-beta.1",
+        version: "0.2.1-beta.1",
+        tag: "v0.2.1-beta.1",
         commit: "a".repeat(40),
         channel: "stable",
       })
     ).toThrow("channel")
     expect(() =>
       validateReleaseIdentity({
-        version: "0.2.0",
-        tag: "v0.2.1",
+        version: "0.2.1",
+        // 不一致探针用版本链之外的字面值，避免 release:bump 批量替换后两边变成一致
+        tag: "v99.0.0",
         commit: "a".repeat(40),
         channel: "stable",
       })

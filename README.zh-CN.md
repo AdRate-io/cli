@@ -132,7 +132,7 @@ preview 不携带 idempotency key，不使用 receipt、Command 或本地 pendin
 
 ## Windows 边界
 
-Windows 状态目录使用受保护 DACL，并拒绝 reparse point。ACL helper 只运行固定的 PowerShell 程序，路径和 PID 输入都不进入 argv。Token fallback 的 read/write/remove 固定 fail-closed。
+Windows 上会话 Token 存于 Windows 凭据管理器。本地状态文件位于 `%USERPROFILE%\.adrate`，继承用户目录的默认权限，并拒绝符号链接与 junction。CLI 不启动任何子进程。Windows 上禁用 Token fallback 文件（read/write/remove 固定 fail-closed）。
 
 ## 范围边界
 
