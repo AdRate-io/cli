@@ -23,17 +23,12 @@ import {
   KeytarCredentialBackend,
 } from "./storage/credential-backend.js"
 import { createCliPaths } from "./storage/paths.js"
-import { DefaultNativeProcessRunner } from "./storage/native-process.js"
 import { SecureFileSystem, hardenProcessUmask } from "./storage/secure-files.js"
 import { CliStateStore } from "./storage/state-store.js"
 import { SkillCatalog } from "./skills/skill-catalog.js"
 import { SkillsInstallService } from "./skills/skills-install-service.js"
 import { SkillsService } from "./skills/skills-service.js"
 import { SkillsNotifier } from "./skills/skills-notifier.js"
-import {
-  PowerShellWindowsAclController,
-  trustedWindowsPowerShellPath,
-} from "./storage/windows-acl.js"
 import type { HttpTransport } from "./http/client.js"
 
 export interface CliRuntimeOptions {
@@ -86,17 +81,7 @@ const DEFAULT_PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url))
 export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
   hardenProcessUmask()
   const paths = createCliPaths(options.root)
-  const windowsAcl =
-    process.platform === "win32"
-      ? new PowerShellWindowsAclController(
-          new DefaultNativeProcessRunner(),
-          trustedWindowsPowerShellPath()
-        )
-      : undefined
-  const fileSystem = new SecureFileSystem({
-    root: paths.root,
-    ...(windowsAcl ? { windowsAcl } : {}),
-  })
+  const fileSystem = new SecureFileSystem({ root: paths.root })
   const state = new CliStateStore(fileSystem, paths)
   const credentials =
     options.credentialStore ??

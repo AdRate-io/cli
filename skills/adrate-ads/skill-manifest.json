@@ -2,10 +2,10 @@
   "formatVersion": 1,
   "name": "adrate-ads",
   "description": "Inspect Ads and GMV Max Campaigns, run Campaign Copy tasks, select TikTok authorizations, manage automation rules, and apply single-Campaign status, budget, or ROAS changes safely. Use for every AdRate CLI advertising read or write operation.",
-  "version": "1.7.0",
-  "minCliVersion": "0.2.0",
+  "version": "1.8.0",
+  "minCliVersion": "0.2.1",
   "requiredBin": "adrate",
   "cliHelp": "adrate skills read adrate-ads",
-  "shellSha256": "a8bdc224bc04a7dc395410ea5746af26322a4f9982cc0795de27477a08a010d1",
-  "contentSha256": "033c7a00a554d637bbf231d3bc97acc1fc314f2b7b90d50c966c6821e72c8ed9"
+  "shellSha256": "55d4fff787db61396c8bdca5e887136e1f2452c348faca34ca941d7fe35e30a9",
+  "contentSha256": "f2769c28585151d99f18a4630296c7e6050954244ac3510b40321c61e977dc1c"
 }

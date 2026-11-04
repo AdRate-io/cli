@@ -12,7 +12,6 @@ import {
 import { dirname, isAbsolute, relative, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { TextDecoder } from "node:util"
-import { dependencyFailure } from "../errors.js"
 import { SecureFileLockCoordinator } from "./secure-file-lock.js"
 import type { LockRequirement } from "./secure-file-lock.js"
 
@@ -34,18 +33,10 @@ const STRICT_UTF8_DECODER = new TextDecoder("utf-8", {
   ignoreBOM: true,
 })
 
-export interface WindowsAclController {
-  ensureDirectory: (path: string) => Promise<void>
-  secure: (path: string, kind: "file" | "directory") => Promise<void>
-  verify: (path: string, kind: "file" | "directory") => Promise<boolean>
-  atomicReplace: (source: string, target: string) => Promise<void>
-}
-
 export interface SecureFileSystemOptions {
   root: string
   platform?: NodeJS.Platform
   uid?: number | null
-  windowsAcl?: WindowsAclController
   /** 仅供确定性文件竞态回归使用；生产 runtime 不传入。 */
   testHooks?: {
     afterReadFileOpened?: (path: string) => void | Promise<void>
@@ -111,7 +102,6 @@ export class SecureFileSystem {
   readonly root: string
   private readonly platform: NodeJS.Platform
   private readonly uid: number | null
-  private readonly windowsAcl?: WindowsAclController
   private readonly lockCoordinator: SecureFileLockCoordinator
   private readonly testHooks?: SecureFileSystemOptions["testHooks"]
 
@@ -124,7 +114,6 @@ export class SecureFileSystem {
     this.uid =
       options.uid ??
       (typeof process.getuid === "function" ? process.getuid() : null)
-    this.windowsAcl = options.windowsAcl
     this.testHooks = options.testHooks
     this.lockCoordinator = new SecureFileLockCoordinator({
       operations: {
@@ -160,17 +149,16 @@ export class SecureFileSystem {
   async ensureDirectory(path: string): Promise<void> {
     const target = this.assertContained(path)
     if (target !== this.root) await this.ensureDirectory(dirname(target))
-    if (this.platform === "win32") {
-      await this.requireWindowsAcl().ensureDirectory(target)
-    } else {
-      let created = false
-      try {
-        await mkdir(target, { mode: DIRECTORY_MODE })
-        created = true
-      } catch (error) {
-        if (!isNodeError(error) || error.code !== "EEXIST") throw error
-      }
-      if (created) await chmod(target, DIRECTORY_MODE)
+    let created = false
+    try {
+      // Windows 忽略 mode，目录继承用户 profile 的默认 ACL（见 verifyPath 注释）。
+      await mkdir(target, { mode: DIRECTORY_MODE })
+      created = true
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "EEXIST") throw error
+    }
+    if (created && this.platform !== "win32") {
+      await chmod(target, DIRECTORY_MODE)
     }
     await this.verifyPath(target, "directory")
   }
@@ -304,11 +292,8 @@ export class SecureFileSystem {
       await this.verifyPath(temporary, "file")
       await this.lockCoordinator.assertOwned(lock)
       await this.assertFileIdentity(target, targetIdentity)
-      if (this.platform === "win32") {
-        await this.requireWindowsAcl().atomicReplace(temporary, target)
-      } else {
-        await rename(temporary, target)
-      }
+      // Windows 上 libuv 以 MoveFileExW(MOVEFILE_REPLACE_EXISTING) 实现，同卷原子替换。
+      await rename(temporary, target)
       await this.syncDirectory(parent)
       await this.verifyPath(target, "file")
       await this.verifyResolvedParent(target)
@@ -409,11 +394,8 @@ export class SecureFileSystem {
   }
 
   private async secureCreatedFile(path: string): Promise<void> {
-    if (this.platform === "win32") {
-      await this.requireWindowsAcl().secure(path, "file")
-    } else {
-      await chmod(path, FILE_MODE)
-    }
+    if (this.platform === "win32") return
+    await chmod(path, FILE_MODE)
   }
 
   private async verifyPath(
@@ -427,12 +409,13 @@ export class SecureFileSystem {
     ) {
       throw new SecureFileError(`The local ${kind} path is unsafe.`)
     }
-    if (this.platform === "win32") {
-      if (!(await this.requireWindowsAcl().verify(path, kind))) {
-        throw new SecureFileError(`The local ${kind} ACL is too broad.`)
-      }
-      return
-    }
+    // Windows 不做自定义 ACL：状态目录位于 %USERPROFILE%，默认 DACL 只授予
+    // 本人 / SYSTEM / Administrators，而 Token 本身存于凭据管理器。
+    // 曾经的 PowerShell ACL 加固会被企业杀软（Symantec SONAR.SuspLaunch）
+    // 当作可疑进程启动拦截，导致登录不可用，因此 CLI 保持零子进程。
+    // symlink / junction（Node 在 Windows 上均报告为 symbolic link）、类型、
+    // containment 与 realpath 检查仍跨平台生效。
+    if (this.platform === "win32") return
     const expected = kind === "file" ? FILE_MODE : DIRECTORY_MODE
     if (modeBits(info.mode) !== expected) {
       throw new SecureFileError(
@@ -525,15 +508,6 @@ export class SecureFileSystem {
     } finally {
       await handle.close()
     }
-  }
-
-  private requireWindowsAcl(): WindowsAclController {
-    if (!this.windowsAcl) {
-      throw dependencyFailure(
-        "Windows ACL verification is unavailable; refusing to store credentials."
-      )
-    }
-    return this.windowsAcl
   }
 }
 

@@ -74,13 +74,13 @@ describe("SkillsService", () => {
         skills: [
           {
             name: "adrate-ads",
-            version: "1.7.0",
+            version: "1.8.0",
             minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
           {
             name: "adrate-shared",
-            version: "1.7.0",
+            version: "1.8.0",
             minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
             description: expect.any(String),
           },
@@ -111,7 +111,7 @@ describe("SkillsService", () => {
     if (outcome.envelope.ok) {
       expect(outcome.envelope.data).toStrictEqual({
         name: "adrate-shared",
-        version: "1.7.0",
+        version: "1.8.0",
         path: "SKILL.md",
         content: expected,
         sha256: sha256SkillText(expected),

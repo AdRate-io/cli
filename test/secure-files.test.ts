@@ -35,29 +35,11 @@ afterEach(async () => {
 })
 
 describe("SecureFileSystem create-if-absent platform contract", () => {
-  it("uses no-replace publication on the Windows ACL code path", async () => {
+  it("runs the Windows code path without any external ACL helper", async () => {
     fixture = await createTemporaryStateFixture()
-    const aclCalls: Array<string> = []
     const fileSystem = new SecureFileSystem({
       root: fixture.root,
       platform: "win32",
-      windowsAcl: {
-        async ensureDirectory(path) {
-          await mkdir(path, { recursive: true })
-          aclCalls.push(`directory:${path}`)
-        },
-        secure(path, kind) {
-          aclCalls.push(`secure:${kind}:${path}`)
-          return Promise.resolve()
-        },
-        async verify(path, kind) {
-          const info = await lstat(path)
-          return kind === "file" ? info.isFile() : info.isDirectory()
-        },
-        async atomicReplace(source, target) {
-          await rename(source, target)
-        },
-      },
     })
     const target = join(fixture.root, "pending", "windows.json")
 
@@ -67,9 +49,29 @@ describe("SecureFileSystem create-if-absent platform contract", () => {
     await expect(fileSystem.atomicCreate(target, "second\n")).resolves.toBe(
       "exists"
     )
-
     expect(await fileSystem.readSecureFile(target)).toBe("first\n")
-    expect(aclCalls.some((call) => call.startsWith("secure:file:"))).toBe(true)
+
+    await fileSystem.atomicWrite(target, "replaced\n")
+    expect(await fileSystem.readSecureFile(target)).toBe("replaced\n")
+    await expect(fileSystem.removeSecureFile(target)).resolves.toBe(true)
+    expect(await fileSystem.readSecureFile(target)).toBeNull()
+  })
+
+  it("still rejects symbolic links on the Windows code path", async () => {
+    fixture = await createTemporaryStateFixture()
+    const fileSystem = new SecureFileSystem({
+      root: fixture.root,
+      platform: "win32",
+    })
+    await fileSystem.ensureRoot()
+    const real = join(fixture.root, "real.json")
+    const linked = join(fixture.root, "linked.json")
+    await writeFile(real, "data")
+    await symlink(real, linked)
+
+    await expect(fileSystem.readSecureFile(linked)).rejects.toThrow(
+      "symbolic link"
+    )
   })
 })
 

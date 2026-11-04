@@ -76,7 +76,7 @@ describe("SkillsInstallService", () => {
       ])
       for (const skill of skills) {
         expect(skill.status).toBe("installed")
-        expect(skill.version).toBe("1.7.0")
+        expect(skill.version).toBe("1.8.0")
       }
     }
     expect(outcome.humanOutput).toMatchObject({
@@ -135,7 +135,7 @@ describe("SkillsInstallService", () => {
       "skill-manifest.json"
     )
     const shell = (await readFile(shellPath, "utf8")).replace(
-      'version: "1.7.0"',
+      'version: "1.8.0"',
       'version: "2.0.0"'
     )
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
@@ -449,7 +449,7 @@ describe("SkillsInstallService", () => {
     const manifestPath = join(skillDir, "skill-manifest.json")
     // 模拟已安装旧版本
     const shell = (await readFile(shellPath, "utf8")).replace(
-      'version: "1.7.0"',
+      'version: "1.8.0"',
       'version: "0.9.0"'
     )
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {

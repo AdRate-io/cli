@@ -151,12 +151,12 @@ describe("SkillsNotifier", () => {
       required: [
         {
           name: "adrate-shared",
-          version: "1.7.0",
+          version: "1.8.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
         {
           name: "adrate-ads",
-          version: "1.7.0",
+          version: "1.8.0",
           minCliVersion: BUNDLED_SKILL_MIN_CLI_VERSION,
         },
       ],
@@ -225,7 +225,7 @@ describe("SkillsNotifier", () => {
     await writeFile(
       sharedShell,
       (await readFile(sharedShell, "utf8")).replace(
-        'version: "1.7.0"',
+        'version: "1.8.0"',
         "version: true"
       )
     )
@@ -308,7 +308,7 @@ describe("SkillsNotifier", () => {
         {
           _notice: {
             credential: { message: "credential-warning" },
-            update: { version: "0.2.0" },
+            update: { version: "0.2.1" },
             skills: { level: "server-controlled" },
           },
         }
@@ -318,7 +318,7 @@ describe("SkillsNotifier", () => {
     const merged = withSkillsNotifierInspection(base, suppressed)
     expect(merged.envelope.meta._notice).toStrictEqual({
       credential: { message: "credential-warning" },
-      update: { version: "0.2.0" },
+      update: { version: "0.2.1" },
     })
     expect(merged.warnings).toStrictEqual(["credential-warning"])
 
@@ -345,7 +345,7 @@ describe("SkillsNotifier", () => {
         {
           _notice: {
             credential: { message: "credential-warning" },
-            update: { version: "0.2.0" },
+            update: { version: "0.2.1" },
           },
         }
       ),
@@ -356,7 +356,7 @@ describe("SkillsNotifier", () => {
     expect(merged.exitCode).toBe(0)
     expect(merged.envelope.meta._notice).toMatchObject({
       credential: { message: "credential-warning" },
-      update: { version: "0.2.0" },
+      update: { version: "0.2.1" },
       skills: { level: "warning" },
     })
 

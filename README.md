@@ -132,7 +132,7 @@ After every other command the CLI checks the local installs. A Skill that is alr
 
 ## Windows boundaries
 
-Windows state directories use a protected DACL and reject reparse points. The ACL helper runs only a fixed PowerShell program, and neither path nor PID input reaches argv. Token fallback read/write/remove are fail-closed by design.
+On Windows the session token is stored in Windows Credential Manager. Local state files live under `%USERPROFILE%\.adrate` and inherit the user profile's default permissions; symbolic links and junctions are rejected. The CLI does not launch any child processes. Token fallback files are disabled on Windows (read/write/remove are fail-closed by design).
 
 ## Scope boundaries
 

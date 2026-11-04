@@ -30,9 +30,9 @@ export const NOW_ISO = "2026-07-31T08:00:00.000Z"
  * prerelease 期间两者必须成对写成「精确 prerelease 版本 + @next」：
  * prerelease 只打 next tag，`npm install -g @adrate/cli` 解析的是 latest，
  * 装不到该版本，Agent 会陷入「判定版本过期 → 安装 → 仍然过期」的重装环路。
- * 发 stable 版时同步改回 "0.2.0" 与不带 tag 的安装命令。
+ * 发 stable 版时同步改回 "0.2.1" 与不带 tag 的安装命令。
  */
-export const BUNDLED_SKILL_MIN_CLI_VERSION = "0.2.0"
+export const BUNDLED_SKILL_MIN_CLI_VERSION = "0.2.1"
 export const BUNDLED_SKILL_INSTALL_COMMAND = "npm install -g @adrate/cli"
 
 export interface TemporaryStateFixture {
@@ -119,7 +119,7 @@ export function validCredentialMetadata(
     deviceName: "Boss-Mac",
     clientInstanceId: CLIENT_INSTANCE_ID,
     loggedInAt: NOW_ISO,
-    cliVersion: "0.2.0",
+    cliVersion: "0.2.1",
     absoluteExpiresAt: "2026-08-30T08:00:00.000Z",
     ...overrides,
   }

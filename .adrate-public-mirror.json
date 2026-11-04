@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "ef85d887a23051718fa19ebe87b8517ca91bd354",
-  "baseTargetCommit": "83f9a599d4abe44ff7014dc226508f62938bc500",
+  "sourceCommit": "9f733ffbac3a9276e814129984edfca1e2f079c1",
+  "baseTargetCommit": "bf0880448af5f4d2b15ffd63ad200c095b0e511b",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -25,7 +25,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "03dfed3434e7f523c0169fad9e6ac5152737b2da811201855f754dcc90cbf979"
+      "sha256": "eedebaf974cccb8921379ed8852fa9d982dccab781f7085227e296b1bb1b7fa5"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -33,11 +33,11 @@
     },
     {
       "path": "README.md",
-      "sha256": "9708b895b05e5e14eadeb6140e385eacede587d0e4f16b78d8dcba31fd2a9e48"
+      "sha256": "1b2f94a303cd1a6b46f10f1db9bf01b1638c262b84c9426e9da0457d88131b2d"
     },
     {
       "path": "README.zh-CN.md",
-      "sha256": "d1d91b1412f0d50d50714ce520826b54dd5ea1931349383b7d0b0c744bba66d3"
+      "sha256": "c9485ec922fd72f0a2be0d6c93bc574ffaff523723bcdc40ba65bb11bfb0ef9e"
     },
     {
       "path": "release/README.md",
@@ -97,7 +97,7 @@
     },
     {
       "path": "skills-content/adrate-ads/SKILL.md",
-      "sha256": "033c7a00a554d637bbf231d3bc97acc1fc314f2b7b90d50c966c6821e72c8ed9"
+      "sha256": "f2769c28585151d99f18a4630296c7e6050954244ac3510b40321c61e977dc1c"
     },
     {
       "path": "skills-content/adrate-shared/SKILL.md",
@@ -109,11 +109,11 @@
     },
     {
       "path": "skills/adrate-ads/skill-manifest.json",
-      "sha256": "9bbed505f72793ee53bf936c3dec36e6a742a165897d8fb7099d5121754428f0"
+      "sha256": "98dcb325339962b17b1b2a759a25b95ddb479ad63351366b16363a01d12e5dd1"
     },
     {
       "path": "skills/adrate-ads/SKILL.md",
-      "sha256": "a8bdc224bc04a7dc395410ea5746af26322a4f9982cc0795de27477a08a010d1"
+      "sha256": "55d4fff787db61396c8bdca5e887136e1f2452c348faca34ca941d7fe35e30a9"
     },
     {
       "path": "skills/adrate-shared/agents/openai.yaml",
@@ -121,11 +121,11 @@
     },
     {
       "path": "skills/adrate-shared/skill-manifest.json",
-      "sha256": "e5423b437d4adce3fdbe7689c5da8115c8d13d093bd59348a9076339759df1ed"
+      "sha256": "912079dd1f6c472bce794adf6f9e7fb06082be77a2199521314262807fc1a976"
     },
     {
       "path": "skills/adrate-shared/SKILL.md",
-      "sha256": "a3e524c5589b719141e61fcf2626a90cf3ea5e8e83e1e4d451908a9078a44cea"
+      "sha256": "82099317bc86fb596d349baab70f52cd58125f146171350b2f8741d16ddb90ec"
     },
     {
       "path": "src/application.ts",
@@ -321,7 +321,7 @@
     },
     {
       "path": "src/runtime.ts",
-      "sha256": "4f85417531e79486f1d7e886da848ce04b603ad07d1c3a39e7aa73c6379eb8ee"
+      "sha256": "3701f56470c0b2fc1f1c3151baadd4e2583b1177ba64bd319c1ae81ef18d68cc"
     },
     {
       "path": "src/skills/skill-catalog.ts",
@@ -352,10 +352,6 @@
       "sha256": "995e06fc2fbb7da87a109442d4786a93f788f7af739571307a5e9ab969b6ee75"
     },
     {
-      "path": "src/storage/native-process.ts",
-      "sha256": "85698fcacd2d43656c84dabc8f020b63799d2e9ab331653c7efdfb0e9892e647"
-    },
-    {
       "path": "src/storage/paths.ts",
       "sha256": "d7d1910937be98b64801da4ec52f6b06c8e6987c50d7eb406b994476733b20ca"
     },
@@ -369,15 +365,11 @@
     },
     {
       "path": "src/storage/secure-files.ts",
-      "sha256": "76102b11e09152d193b5debbf9c04ecf3d49c98089e690b9dbb5c6b2fff5833a"
+      "sha256": "55fa6326227dad03411752bea05514a3643df2548acce772edbda82c84dc4119"
     },
     {
       "path": "src/storage/state-store.ts",
       "sha256": "5d90c577fc121cbfcd855ec59c702e8de36ff4844c3f670f4b4333716014b594"
-    },
-    {
-      "path": "src/storage/windows-acl.ts",
-      "sha256": "0af22d2b0d44edd7e8d3096539966659986ffc314650e287184ab58977dc103e"
     },
     {
       "path": "src/types/keytar.d.ts",
@@ -397,11 +389,11 @@
     },
     {
       "path": "test/auth.test.ts",
-      "sha256": "726a2205433933c4612e91818d59fd1258c02c3e1e35a4da7452d1a28a9a6591"
+      "sha256": "228c01012b8dbf7b2538ad5a76a9d4f3315ac3891f796216d088bfcc5dc4b789"
     },
     {
       "path": "test/bin-process-exit-code.test.ts",
-      "sha256": "1a871a6a69c48ba3310aece3d62df4a3bf32ae3926d1d44c11272263c7f9cc0b"
+      "sha256": "d56d30eef0a4065205658a3ae743c254a0c93ab4b44f16b5205a19c1fa7f985a"
     },
     {
       "path": "test/budget-command-service.test.ts",
@@ -457,7 +449,7 @@
     },
     {
       "path": "test/feedback-command-service.test.ts",
-      "sha256": "f7cde8b3a524c206b96da7d07631b21bb00bf26f64825dff5eabfd06b760d32c"
+      "sha256": "15168b25e5b19f836cb8d292d596332e31b2efd4c632e1107cbbd46fa112fc41"
     },
     {
       "path": "test/gmvmax-command-service.test.ts",
@@ -465,7 +457,7 @@
     },
     {
       "path": "test/helpers.ts",
-      "sha256": "d07a2be204d2ee89ac8f521af61bb843eead93b9f8d1056c2f0d5541ce948fa1"
+      "sha256": "e64e4663ce745b899a10693d0075b3441514b8c77cab327f54fb92b88355c11a"
     },
     {
       "path": "test/http.test.ts",
@@ -474,6 +466,10 @@
     {
       "path": "test/me-contract.test.ts",
       "sha256": "293e6a92585e9da7ae32ea6c528066341c14f14096c9056e215416feb52d1362"
+    },
+    {
+      "path": "test/no-child-process.test.ts",
+      "sha256": "affc205567a3c8c213ebd95d7d136d9d6609dbda80d68a20c38fefe02ee15d6f"
     },
     {
       "path": "test/oauth-contract.test.ts",
@@ -513,7 +509,7 @@
     },
     {
       "path": "test/release-gate.test.ts",
-      "sha256": "30384b3e8319779aaff7dd3d8495be9e9eb854629e1bc610b1c71ec1d4ca9a8c"
+      "sha256": "75c50f888dd4613fcaa45008f9e506c5798f1b365250d7e44f655b6f62a7d13b"
     },
     {
       "path": "test/resource-input.test.ts",
@@ -533,15 +529,15 @@
     },
     {
       "path": "test/secure-files.test.ts",
-      "sha256": "e94a21f23c7620b1d648c66772bdb6c0f7ca78b0fc05fdf0977c26c6eda0c8e3"
+      "sha256": "a7696c081ce1a0fcc66a13432170601a72f7fc4111487619e668e07ca94d7c90"
     },
     {
       "path": "test/skill-assets-validator.test.ts",
-      "sha256": "0d40499695848ca6fd21d45273c7116cfd47971f7147e5db9cc89fc84ae6bf75"
+      "sha256": "fc63ba5a16a4d358a02402f80e67f5c410e6e7a8a6c316cc09dc8f2631443464"
     },
     {
       "path": "test/skill-contract.test.ts",
-      "sha256": "36fb6303a02c78df0042b4514a8bcda7e03e538f17d666372222e6d348eadc18"
+      "sha256": "0f44ea84b695775ccd32f46a872f049c40e9e834a523e6a48e5fda721dd4fda0"
     },
     {
       "path": "test/skill-path-reader.test.ts",
@@ -553,11 +549,11 @@
     },
     {
       "path": "test/skills-install.test.ts",
-      "sha256": "cfd16b4f72364c806d8d6cd39e82c3539aa6ca944e7bbde2781884f9aed965df"
+      "sha256": "1da1e7bd432bcbae45a7ad84a01990f0936ba31c709d319582eff0e69499c2b6"
     },
     {
       "path": "test/skills-notifier.test.ts",
-      "sha256": "db2fc5d57e938afe89c74b29ab91fd2e2483d96ddf3d08eeef30408ef880c4a9"
+      "sha256": "ce7f793599cf147b3e59cafdedef6d86e956299b0224d5cb4154ee08a7c6d02a"
     },
     {
       "path": "test/skills-runtime-e2e.test.ts",
@@ -565,7 +561,7 @@
     },
     {
       "path": "test/skills-service.test.ts",
-      "sha256": "10a09a3149e979f5ab646c5f9a762a453fb6c98d4d7658c33be65d0271164f6a"
+      "sha256": "f18b1bba2771bf85ba879f7e7635412919a1f19fcc6fb959b8c21e6d437a9afc"
     },
     {
       "path": "test/state-schemas.test.ts",
@@ -578,10 +574,6 @@
     {
       "path": "test/status-command-service.test.ts",
       "sha256": "4aead1469a7b6aa5842a966114b91914561f33cd81aaa373368a5b635ec1bdfe"
-    },
-    {
-      "path": "test/windows-acl.test.ts",
-      "sha256": "38aab250bd20f40f481f1b0baab4ae56472d14a42ba6c3ad75a8b40d06a23780"
     },
     {
       "path": "tsconfig.json",
