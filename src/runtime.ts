@@ -1,5 +1,4 @@
 import { homedir } from "node:os"
-import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { AuthService } from "./auth/auth-service.js"
 import { LocalCredentialCoordinator } from "./auth/local-credentials.js"
@@ -29,6 +28,8 @@ import { SkillCatalog } from "./skills/skill-catalog.js"
 import { SkillsInstallService } from "./skills/skills-install-service.js"
 import { SkillsService } from "./skills/skills-service.js"
 import { SkillsNotifier } from "./skills/skills-notifier.js"
+import { defaultSkillsRoots } from "./skills/skills-roots.js"
+import type { SkillsRootSpec } from "./skills/skills-roots.js"
 import type { HttpTransport } from "./http/client.js"
 
 export interface CliRuntimeOptions {
@@ -45,7 +46,7 @@ export interface CliRuntimeOptions {
   readCopyFile?: (path: string) => Promise<string>
   progress?: (message: string) => void
   packageRoot?: string
-  installedSkillsRoot?: string
+  installedSkillsRoots?: ReadonlyArray<SkillsRootSpec>
 }
 
 /**
@@ -195,21 +196,20 @@ export function createCliRuntime(options: CliRuntimeOptions = {}): CliRuntime {
     options.packageRoot ?? DEFAULT_PACKAGE_ROOT
   )
   const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT
-  const installedSkillsRoot =
-    options.installedSkillsRoot ?? join(homedir(), ".agents", "skills")
+  const installedSkillsRoots =
+    options.installedSkillsRoots ?? defaultSkillsRoots(homedir())
   const skillsInstall = new SkillsInstallService(skillCatalog, {
     packageRoot,
-    installedSkillsRoot,
+    installedSkillsRoots,
   })
   const skillsNotifier = new SkillsNotifier({
     catalog: skillCatalog,
-    installedSkillsRoot,
+    installedSkillsRoots,
     environment,
     upgrader: skillsInstall,
   })
   const skills = new SkillsService(skillCatalog, {
     inspector: skillsNotifier,
-    installedSkillsRoot,
   })
   const application = new CliApplication(
     auth,

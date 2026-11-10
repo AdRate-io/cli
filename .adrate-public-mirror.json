@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "sourceCommit": "9f733ffbac3a9276e814129984edfca1e2f079c1",
-  "baseTargetCommit": "bf0880448af5f4d2b15ffd63ad200c095b0e511b",
+  "sourceCommit": "ff0ad6a867daea8d95c83882884ff2557c69d1fc",
+  "baseTargetCommit": "c48cefb4fcff61d0f945dfd758bad90b26318109",
   "files": [
     {
       "path": ".github/workflows/publish.yml",
@@ -25,7 +25,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "eedebaf974cccb8921379ed8852fa9d982dccab781f7085227e296b1bb1b7fa5"
+      "sha256": "a1d7b1cf07fcb4a6187f086e970356d3ae91b4012892e4f33d6cfa0a8ea7760f"
     },
     {
       "path": "pnpm-lock.yaml",
@@ -33,11 +33,11 @@
     },
     {
       "path": "README.md",
-      "sha256": "1b2f94a303cd1a6b46f10f1db9bf01b1638c262b84c9426e9da0457d88131b2d"
+      "sha256": "cca571b918cd4678e214c92750174d5b87fb93ededa93abe3f73c5bb96c04831"
     },
     {
       "path": "README.zh-CN.md",
-      "sha256": "c9485ec922fd72f0a2be0d6c93bc574ffaff523723bcdc40ba65bb11bfb0ef9e"
+      "sha256": "8add9d02d62150f5ea593cf68ac27cd08e6ac08294f9605a771ae3e5563f6851"
     },
     {
       "path": "release/README.md",
@@ -313,7 +313,7 @@
     },
     {
       "path": "src/parser.ts",
-      "sha256": "11ffae0a9a6e30d1bfd61d7910c4906072b84a7a9e5ccbe7696b6b74e5c108f7"
+      "sha256": "8658a63a04ea5f12b810b667cf92626a3b77736a26dbcab836eb93675abf3596"
     },
     {
       "path": "src/runner.ts",
@@ -321,7 +321,7 @@
     },
     {
       "path": "src/runtime.ts",
-      "sha256": "3701f56470c0b2fc1f1c3151baadd4e2583b1177ba64bd319c1ae81ef18d68cc"
+      "sha256": "ebc4a105a316736f57095d86ffa1fc5479ab5f3f8af21faa4c82b6b191665b93"
     },
     {
       "path": "src/skills/skill-catalog.ts",
@@ -337,15 +337,19 @@
     },
     {
       "path": "src/skills/skills-install-service.ts",
-      "sha256": "a1d074d274f9ca31bb3ba8564c8ea20b1f60512bdb5ec806f82f0ef16f5c2e83"
+      "sha256": "5dc69946b0a35c69fe2c147a95287b90f6141c51303d105b98522222bd59bee6"
     },
     {
       "path": "src/skills/skills-notifier.ts",
-      "sha256": "95ba80a981da85760b0fd825008ee7661346e38a3d551a3e3c77f33c89192d37"
+      "sha256": "f28e3c67e21f28d581e5b0a6cbfa378b66034cbc78a33dd10e1bfe7d94f38d68"
+    },
+    {
+      "path": "src/skills/skills-roots.ts",
+      "sha256": "11bfa193389f6a75781461753684db6087e301f69fcdb7b1640dbd47c8c71bdb"
     },
     {
       "path": "src/skills/skills-service.ts",
-      "sha256": "aa34f41bbfa2687be25ea7c1f91669e41dbece6c980e302e4cf7d5ca7b992c2f"
+      "sha256": "6b124cee43d7e2e688a6f42d744548f4b7053da87014e8a063c244cb46d2aa52"
     },
     {
       "path": "src/storage/credential-backend.ts",
@@ -549,19 +553,23 @@
     },
     {
       "path": "test/skills-install.test.ts",
-      "sha256": "1da1e7bd432bcbae45a7ad84a01990f0936ba31c709d319582eff0e69499c2b6"
+      "sha256": "a5fce210e4d4e7a7aaa0065a96e32d0ab12bf8a17c040986d4347af00989755b"
     },
     {
       "path": "test/skills-notifier.test.ts",
-      "sha256": "ce7f793599cf147b3e59cafdedef6d86e956299b0224d5cb4154ee08a7c6d02a"
+      "sha256": "b85e6ed72e8355dbc42750596583d1c19bcafaf0d96c55d9dde645e6811456a0"
+    },
+    {
+      "path": "test/skills-roots.test.ts",
+      "sha256": "5386c7d7bf512408a827a1f720b4a9104116c16808a18fc45ced07a6ff2d9054"
     },
     {
       "path": "test/skills-runtime-e2e.test.ts",
-      "sha256": "08d29ced4fee99cbdbf519f64c2f7f2fdf34bd8376bddb4a065aae7a76bf4036"
+      "sha256": "1a924c986ed4afb1a6f75354b21c81d4dac8feda1036359ecb3970450d17dc2e"
     },
     {
       "path": "test/skills-service.test.ts",
-      "sha256": "f18b1bba2771bf85ba879f7e7635412919a1f19fcc6fb959b8c21e6d437a9afc"
+      "sha256": "1a8904009c82552cf3f8a606b663357890d9bd9e77799f9c1847816628462b78"
     },
     {
       "path": "test/state-schemas.test.ts",

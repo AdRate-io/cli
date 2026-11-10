@@ -124,9 +124,9 @@ preview 不携带 idempotency key，不使用 receipt、Command 或本地 pendin
 
 两项 Skill 固定为 `adrate-shared` 和 `adrate-ads`。`skills-content` 保存完整正文，`skills` 保存安装壳、manifest 和 OpenAI 配置。
 
-`adrate skills install` 只从当前 npm 包复制固定白名单内的文件到 `~/.agents/skills/`，不联网、不调用 git。安装前会校验 Skill 名称、frontmatter/manifest/openai schema、包内摘要、UTF-8、大小、安全相对路径和普通文件边界；写入使用临时目录与原子替换。旧 CLI 不会静默覆盖版本更高的已安装 Skill。
+`adrate skills install` 只从当前 npm 包复制固定白名单内的文件，同时写入 `~/.agents/skills/`（Codex、Gemini CLI 等支持 Agent Skills 的客户端读取）和 `~/.claude/skills/`（Claude Code 只读自己的目录；仅当 `~/.claude/` 已存在时启用），不联网、不调用 git，两个目录执行同一套校验与写入。一个目录失败不影响另一个：命令会逐目录报告结果并以非 0 退出，重跑即可补齐。安装前会校验 Skill 名称、frontmatter/manifest/openai schema、包内摘要、UTF-8、大小、安全相对路径和普通文件边界；写入使用临时目录与原子替换。旧 CLI 不会静默覆盖版本更高的已安装 Skill。
 
-`skills list/read/status` 不需要认证且不发网络请求。`skills status` 是只读诊断：逐项列出包内版本、已安装版本、状态（`current` / `outdated` / `newer` / `missing`）以及当前 CLI 是否满足已安装 Skill 的 `minCliVersion`，不写任何文件。
+`skills list/read/status` 不需要认证且不发网络请求。`skills status` 是只读诊断：逐项列出包内版本、已安装版本、状态（`current` / `outdated` / `newer` / `missing`，两个目录取最需要处理的一个，逐目录明细见 `roots`）以及当前 CLI 是否满足已安装 Skill 的 `minCliVersion`，不写任何文件。
 
 执行其他命令后，CLI 会检查本地安装：已安装但版本低于包内的 Skill 会就地自动升级（与 `skills install` 相同的校验和原子写入，绝不降级），并在 stderr 附一行说明；缺失的 Skill 永远不会被自动创建，只通过 `_notice.skills` 提示执行 `adrate skills install`。设置 `ADRATE_NO_SKILLS_NOTIFIER=1` 可同时关闭检查与自动升级，不影响业务退出码。
 

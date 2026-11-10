@@ -1147,7 +1147,10 @@ Server redaction is only a fallback and cannot prove that a message is safe.`,
     helpText: `Usage: adrate skills install
 
 Copies both bundled AdRate CLI Agent Skills from the installed npm package to
-~/.agents/skills/<name>/. Zero network, zero git. Existing files are overwritten
+~/.agents/skills/<name>/ (Codex, Gemini CLI and other Agent Skills clients) and
+~/.claude/skills/<name>/ (Claude Code, only when ~/.claude/ already exists).
+A failure in one directory does not stop the other; every directory's outcome
+is reported. Zero network, zero git. Existing files are overwritten
 only when version or content differs. Safe to run repeatedly. First-time
 installation always requires this command; once installed, an outdated Skill is
 upgraded automatically the next time any other command runs.`,
@@ -1173,10 +1176,11 @@ does not read credentials.`,
     helpTopic: "skills status",
     helpText: `Usage: adrate skills status
 
-Read-only diagnostic of the locally installed Agent Skills in ~/.agents/skills/.
-For each bundled Skill it reports the bundled version, the installed version,
-and a state: current, outdated, newer (installed by a newer CLI and never
-downgraded), or missing. cliCompatible tells whether this CLI satisfies the
+Read-only diagnostic of the locally installed Agent Skills in ~/.agents/skills/
+and ~/.claude/skills/ (the latter only when ~/.claude/ exists). For each bundled Skill it reports the bundled version,
+the installed version, and a state: current, outdated, newer (installed by a
+newer CLI and never downgraded), or missing. Across the two directories the
+state most in need of action wins; per-directory detail is listed in roots. cliCompatible tells whether this CLI satisfies the
 installed Skill's minCliVersion. It never installs or upgrades anything and
 does not read credentials. Other commands upgrade outdated installs
 automatically; missing Skills still need adrate skills install.`,

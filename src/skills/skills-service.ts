@@ -80,7 +80,6 @@ export class SkillsService {
     private readonly catalog: SkillCatalog,
     private readonly options: {
       inspector: Pick<SkillsNotifier, "facts">
-      installedSkillsRoot: string
     }
   ) {}
 
@@ -110,13 +109,29 @@ export class SkillsService {
     const needsInstall = rows.some(
       (row) => row.state === "missing" || row.state === "outdated"
     )
+    // 启用的根目录以 facts 为唯一来源（与 notifier 同一判定）
+    const installedSkillsRoots = facts[0]?.roots.map((root) => root.root) ?? []
     const data = {
-      installedSkillsRoot: this.options.installedSkillsRoot,
+      installedSkillsRoots,
+      // 兼容 0.2.1 及以前的单目录字段（取第一个根目录）
+      installedSkillsRoot: installedSkillsRoots[0] ?? null,
       skills: rows,
       suggestedAction: needsInstall ? "install_skills" : null,
       command: needsInstall ? "adrate skills install" : null,
     } as unknown as JsonObject
     const hint = needsInstall ? "\nRun: adrate skills install" : ""
+    // 多目录时逐目录列出非 current 的明细，便于定位是哪个客户端目录缺失
+    const rootLines =
+      installedSkillsRoots.length > 1
+        ? rows
+            .flatMap((row) =>
+              row.roots
+                .filter((root) => root.state !== "current")
+                .map((root) => `  ${row.name} @ ${root.root}: ${root.state}`)
+            )
+            .join("\n")
+        : ""
+    const detail = rootLines ? `\n${rootLines}` : ""
     return {
       exitCode: EXIT_CODE.success,
       envelope: createLocalSuccess(localRequestId(), data, {
@@ -126,7 +141,7 @@ export class SkillsService {
       humanOutput: {
         stream: "stdout",
         mode: "line",
-        value: `${statusTable(rows)}${hint}`,
+        value: `${statusTable(rows)}${detail}${hint}`,
       },
     }
   }

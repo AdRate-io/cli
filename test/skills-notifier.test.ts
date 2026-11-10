@@ -44,7 +44,7 @@ async function installAll(installed: string) {
 function notifier(installed: string, environment: NodeJS.ProcessEnv = {}) {
   return new SkillsNotifier({
     catalog: new SkillCatalog(CLI_ROOT),
-    installedSkillsRoot: installed,
+    installedSkillsRoots: [{ path: installed }],
     environment,
   })
 }
@@ -56,13 +56,13 @@ function upgradingNotifier(
   const catalog = new SkillCatalog(CLI_ROOT)
   return new SkillsNotifier({
     catalog,
-    installedSkillsRoot: installed,
+    installedSkillsRoots: [{ path: installed }],
     environment: {},
     upgrader:
       upgrader ??
       new SkillsInstallService(catalog, {
         packageRoot: CLI_ROOT,
-        installedSkillsRoot: installed,
+        installedSkillsRoots: [{ path: installed }],
       }),
   })
 }
@@ -327,7 +327,7 @@ describe("SkillsNotifier", () => {
     })
     const directlySuppressed = await new SkillsNotifier({
       catalog: { requiredManifests } as unknown as SkillCatalog,
-      installedSkillsRoot: installed,
+      installedSkillsRoots: [{ path: installed }],
       environment: { ADRATE_NO_SKILLS_NOTIFIER: "1" },
     }).inspect()
     expect(directlySuppressed).toStrictEqual({ notice: null, warning: null })
@@ -400,7 +400,7 @@ describe("SkillsNotifier", () => {
     } as unknown as SkillCatalog
     const inspection = await new SkillsNotifier({
       catalog: brokenCatalog,
-      installedSkillsRoot: installed,
+      installedSkillsRoots: [{ path: installed }],
       environment: {},
     }).inspect()
     expect(inspection).toStrictEqual({ notice: null, warning: null })
@@ -513,11 +513,102 @@ describe("SkillsNotifier", () => {
     })
   })
 
+  describe("multiple install roots", () => {
+    it("reports missing when one root lacks the Skill, with per-root detail, and never creates it", async () => {
+      const { root, installed } = await fixture()
+      await installAll(installed)
+      const claudeRoot = join(root, "claude-skills")
+      const catalog = new SkillCatalog(CLI_ROOT)
+      const multi = new SkillsNotifier({
+        catalog,
+        installedSkillsRoots: [{ path: installed }, { path: claudeRoot }],
+        environment: {},
+        upgrader: new SkillsInstallService(catalog, {
+          packageRoot: CLI_ROOT,
+          installedSkillsRoots: [{ path: installed }, { path: claudeRoot }],
+        }),
+      })
+
+      const inspection = await multi.inspect({ autoUpgrade: true })
+
+      expect(inspection.notice?.issues).toEqual([
+        { name: "adrate-shared", code: "missing", installedVersion: null },
+        { name: "adrate-ads", code: "missing", installedVersion: null },
+      ])
+      const facts = await multi.facts()
+      expect(facts[0]!.roots).toMatchObject([
+        { root: installed, state: "current" },
+        { root: claudeRoot, state: "missing", installedVersion: null },
+      ])
+      expect(await exists(join(claudeRoot, "adrate-shared", "SKILL.md"))).toBe(
+        false
+      )
+    })
+
+    it("upgrades an outdated root in place and still flags the missing root", async () => {
+      const { root, installed } = await fixture()
+      await installAll(installed)
+      await changeVersion(installed, "adrate-ads", "0.9.0")
+      const claudeRoot = join(root, "claude-skills")
+      const catalog = new SkillCatalog(CLI_ROOT)
+      const multi = new SkillsNotifier({
+        catalog,
+        installedSkillsRoots: [{ path: installed }, { path: claudeRoot }],
+        environment: {},
+        upgrader: new SkillsInstallService(catalog, {
+          packageRoot: CLI_ROOT,
+          installedSkillsRoots: [{ path: installed }, { path: claudeRoot }],
+        }),
+      })
+
+      const inspection = await multi.inspect({ autoUpgrade: true })
+
+      expect(inspection.warning).toMatch(
+        /^AdRate Agent Skills were updated automatically \(adrate-ads 0\.9\.0 -> \d+\.\d+\.\d+\)\. AdRate Agent Skills need attention/
+      )
+      const facts = await multi.facts()
+      expect(facts[1]!.roots[0]).toMatchObject({
+        root: installed,
+        state: "current",
+      })
+      expect(facts[1]!.state).toBe("missing")
+    })
+  })
+
+  describe("client-specific root activation", () => {
+    it("ignores ~/.claude/skills entirely while ~/.claude does not exist", async () => {
+      const { root, installed } = await fixture()
+      await installAll(installed)
+      const claudeDir = join(root, ".claude")
+      const catalog = new SkillCatalog(CLI_ROOT)
+      const roots = [
+        { path: installed },
+        { path: join(claudeDir, "skills"), activeWhenDirExists: claudeDir },
+      ]
+      const conditional = new SkillsNotifier({
+        catalog,
+        installedSkillsRoots: roots,
+        environment: {},
+      })
+
+      expect((await conditional.inspect()).notice).toBeNull()
+      expect((await conditional.facts())[0]!.roots.map((r) => r.root)).toEqual([
+        installed,
+      ])
+
+      await mkdir(claudeDir)
+      const inspection = await conditional.inspect()
+      expect(inspection.notice?.issues.map((issue) => issue.code)).toEqual([
+        "missing",
+        "missing",
+      ])
+    })
+  })
+
   describe("skills status", () => {
     function statusService(installed: string) {
       return new SkillsService(new SkillCatalog(CLI_ROOT), {
         inspector: notifier(installed),
-        installedSkillsRoot: installed,
       })
     }
 
@@ -536,6 +627,7 @@ describe("SkillsNotifier", () => {
       expect(outcome.envelope).toMatchObject({
         ok: true,
         data: {
+          installedSkillsRoots: [installed],
           installedSkillsRoot: installed,
           suggestedAction: "install_skills",
           command: "adrate skills install",

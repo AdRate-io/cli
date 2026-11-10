@@ -22,7 +22,6 @@ import { BUNDLED_SKILL_MIN_CLI_VERSION } from "./helpers.js"
 /** list / read 用例不触达 status，inspector 只为满足构造签名 */
 const UNUSED_INSPECTOR = {
   inspector: { facts: () => Promise.reject(new Error("unused")) },
-  installedSkillsRoot: "/unused",
 }
 
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))

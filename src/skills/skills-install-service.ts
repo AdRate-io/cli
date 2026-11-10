@@ -18,12 +18,14 @@ import {
   SkillPathUnsafeError,
 } from "./skill-path-reader.js"
 import { BundledSkillCorruptError } from "./skill-catalog.js"
+import { activeSkillsRoots } from "./skills-roots.js"
 import type { SkillCatalog } from "./skill-catalog.js"
 import type { CliEnvelope } from "../contracts/envelope.js"
 import type { CliOutcome } from "../errors.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { SkillName } from "./skill-contract.js"
 import type { ReadSkillFile } from "./skill-path-reader.js"
+import type { SkillsRootSpec } from "./skills-roots.js"
 
 const DIRECTORY_MODE = 0o700
 const FILE_MODE = 0o600
@@ -53,6 +55,17 @@ export interface InstallResult {
   status: "installed" | "updated" | "unchanged"
 }
 
+/** 单个安装根目录的结果；error 非 null 表示该目录未装完（其余目录照常处理） */
+interface InstallTarget {
+  root: string
+  skills: Array<InstallResult>
+  error: string | null
+}
+
+function describeInstallError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 interface ExistingSkillStatus {
   version: string
   status: InstallResult["status"]
@@ -79,11 +92,13 @@ async function assertSafeInstallTarget(targetRoot: string): Promise<void> {
   try {
     const info = await lstat(targetRoot)
     if (info.isSymbolicLink()) {
-      throw installFailure("The install target directory is a symbolic link.")
+      throw installFailure(
+        `The install target directory ${targetRoot} is a symbolic link.`
+      )
     }
     if (!info.isDirectory()) {
       throw installFailure(
-        "The install target path exists but is not a directory."
+        `The install target path ${targetRoot} exists but is not a directory.`
       )
     }
   } catch (error) {
@@ -181,42 +196,107 @@ async function assertDirectoryNotReplaced(dirPath: string): Promise<void> {
   }
 }
 
+/** 同一 Skill 在多个根目录的结果合并为一条：installed > updated > unchanged */
+const INSTALL_STATUS_RANK: Readonly<Record<InstallResult["status"], number>> = {
+  installed: 0,
+  updated: 1,
+  unchanged: 2,
+}
+
+function mergeInstallResults(
+  perRoot: ReadonlyArray<ReadonlyArray<InstallResult>>
+): Array<InstallResult> {
+  return SKILL_NAMES.flatMap((name) => {
+    const candidates = perRoot
+      .flatMap((results) => results)
+      .filter((result) => result.name === name)
+      .sort(
+        (a, b) => INSTALL_STATUS_RANK[a.status] - INSTALL_STATUS_RANK[b.status]
+      )
+    return candidates[0] ? [candidates[0]] : []
+  })
+}
+
+function installSummary(results: ReadonlyArray<InstallResult>): string {
+  const newlyInstalled = results.filter((r) => r.status === "installed")
+  const updated = results.filter((r) => r.status === "updated")
+  const parts: Array<string> = []
+  if (newlyInstalled.length > 0) {
+    parts.push(
+      `Installed: ${newlyInstalled.map((r) => `${r.name}@${r.version}`).join(", ")}`
+    )
+  }
+  if (updated.length > 0) {
+    parts.push(
+      `Updated: ${updated.map((r) => `${r.name}@${r.version}`).join(", ")}`
+    )
+  }
+  return parts.length === 0
+    ? "All Agent Skills are already up to date."
+    : `${parts.join(". ")}.`
+}
+
+/**
+ * 启用的安装根目录（见 skills-roots.ts）逐个写入，每个根目录独立执行同一套
+ * 白名单、摘要校验、原子写入与「不降级更高版本」规则。
+ * 根目录之间互相隔离：一个目录异常（如被做成软链）不挡其他目录，最后汇总报告。
+ */
 export class SkillsInstallService {
   constructor(
     private readonly catalog: SkillCatalog,
     private readonly options: {
       packageRoot: string
-      installedSkillsRoot: string
+      installedSkillsRoots: ReadonlyArray<SkillsRootSpec>
     }
   ) {}
 
   async install(): Promise<CliOutcome<CliEnvelope>> {
-    await assertSafeInstallTarget(this.options.installedSkillsRoot)
-    await ensureDirectorySecure(this.options.installedSkillsRoot)
-
-    const results: Array<InstallResult> = []
-    for (const name of SKILL_NAMES) {
-      results.push(await this.installSkill(name))
+    const targets: Array<InstallTarget> = []
+    for (const root of await activeSkillsRoots(
+      this.options.installedSkillsRoots
+    )) {
+      const skills: Array<InstallResult> = []
+      try {
+        await assertSafeInstallTarget(root)
+        await ensureDirectorySecure(root)
+        for (const name of SKILL_NAMES) {
+          skills.push(await this.installSkill(root, name))
+        }
+        targets.push({ root, skills, error: null })
+      } catch (error) {
+        targets.push({ root, skills, error: describeInstallError(error) })
+      }
     }
 
-    const data = { skills: results } as unknown as JsonObject
-    const newlyInstalled = results.filter((r) => r.status === "installed")
-    const updated = results.filter((r) => r.status === "updated")
-    const parts: Array<string> = []
-    if (newlyInstalled.length > 0) {
-      parts.push(
-        `Installed: ${newlyInstalled.map((r) => `${r.name}@${r.version}`).join(", ")}`
+    const failed = targets.filter((target) => target.error !== null)
+    if (failed.length > 0) {
+      // 任一目录未装完即非 0 退出；已写成功的目录同时列出，重跑会补齐（已装的返回 unchanged）
+      const lines = targets.map((target) =>
+        target.error === null
+          ? `${target.root}: ${installSummary(target.skills)}`
+          : `${target.root}: FAILED - ${target.error}`
+      )
+      const message = `Agent Skills were not installed in every directory.\n${lines.join("\n")}`
+      throw new CliFailure<CliEnvelope>(
+        message,
+        EXIT_CODE.business,
+        createLocalError(localRequestId(), "LOCAL_STATE_UNSAFE", message, false, {
+          targets,
+        } as unknown as JsonObject)
       )
     }
-    if (updated.length > 0) {
-      parts.push(
-        `Updated: ${updated.map((r) => `${r.name}@${r.version}`).join(", ")}`
-      )
-    }
+
+    // skills 保持「每个 Skill 一条」的既有形态；逐目录明细在 targets
+    const data = {
+      skills: mergeInstallResults(targets.map((target) => target.skills)),
+      targets,
+    } as unknown as JsonObject
     const summary =
-      parts.length === 0
-        ? "All Agent Skills are already up to date."
-        : `${parts.join(". ")}.`
+      targets.length === 1
+        ? installSummary(targets[0]!.skills)
+        : targets
+            .map((target) => `${target.root}: ${installSummary(target.skills)}`)
+            .join("\n")
 
     return {
       exitCode: EXIT_CODE.success,
@@ -238,25 +318,40 @@ export class SkillsInstallService {
    * 首次安装必须由用户显式执行 `adrate skills install`（不悄悄往用户 home 写新目录），
    * 所以安装根目录或某个 Skill 目录不存在时直接跳过，绝不创建。
    * 其余校验、原子写入与「不降级更高版本」完全复用 installSkill。
+   * 按「根目录 × Skill」逐个隔离失败：某处异常只跳过该处，调用方重读后
+   * 仍是 outdated 的会回落为显式提示。传入的 names 按 Skill 名过滤，
+   * 某目录里已是 current 的同名 Skill 也会走一遍校验（结果 unchanged，无副作用）。
    */
   async upgradeInstalled(
     names: ReadonlyArray<SkillName>
   ): Promise<ReadonlyArray<InstallResult>> {
-    if (!(await isExistingDirectory(this.options.installedSkillsRoot))) {
-      return []
-    }
-    await assertSafeInstallTarget(this.options.installedSkillsRoot)
     const results: Array<InstallResult> = []
-    for (const name of SKILL_NAMES) {
-      if (!names.includes(name)) continue
-      const targetDir = join(this.options.installedSkillsRoot, name)
-      if (!(await isExistingDirectory(targetDir))) continue
-      results.push(await this.installSkill(name))
+    for (const root of await activeSkillsRoots(
+      this.options.installedSkillsRoots
+    )) {
+      try {
+        if (!(await isExistingDirectory(root))) continue
+        await assertSafeInstallTarget(root)
+      } catch {
+        continue
+      }
+      for (const name of SKILL_NAMES) {
+        if (!names.includes(name)) continue
+        try {
+          if (!(await isExistingDirectory(join(root, name)))) continue
+          results.push(await this.installSkill(root, name))
+        } catch {
+          // 该目录的该 Skill 升级失败，不影响其他目录与 Skill
+        }
+      }
     }
     return results
   }
 
-  private async installSkill(name: SkillName): Promise<InstallResult> {
+  private async installSkill(
+    installedSkillsRoot: string,
+    name: SkillName
+  ): Promise<InstallResult> {
     const sourceShellDir = join(this.options.packageRoot, "skills", name)
     const sourceReader = new SkillPathReader(sourceShellDir)
 
@@ -328,9 +423,9 @@ export class SkillsInstallService {
       "agents/openai.yaml": openAiFile,
     }
 
-    const targetDir = join(this.options.installedSkillsRoot, name)
+    const targetDir = join(installedSkillsRoot, name)
     const resolved = resolve(targetDir)
-    if (!contained(resolve(this.options.installedSkillsRoot), resolved)) {
+    if (!contained(resolve(installedSkillsRoot), resolved)) {
       throw installFailure(
         `Skill name "${name}" resolves outside the install directory.`
       )
