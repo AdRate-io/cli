@@ -19,6 +19,7 @@ import { CliFailure } from "../src/errors.js"
 import { SkillCatalog } from "../src/skills/skill-catalog.js"
 import { sha256SkillText } from "../src/skills/skill-contract.js"
 import { SkillsInstallService } from "../src/skills/skills-install-service.js"
+import type { SkillsRootSpec } from "../src/skills/skills-roots.js"
 
 const CLI_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const roots: Array<string> = []
@@ -45,7 +46,7 @@ async function fixture(): Promise<{
   const catalog = new SkillCatalog(packageRoot)
   const service = new SkillsInstallService(catalog, {
     packageRoot,
-    installedSkillsRoot: installedRoot,
+    installedSkillsRoots: [{ path: installedRoot }],
   })
   return { packageRoot, installedRoot, service }
 }
@@ -255,7 +256,7 @@ describe("SkillsInstallService", () => {
     const catalog = new SkillCatalog(packageRoot)
     const service = new SkillsInstallService(catalog, {
       packageRoot,
-      installedSkillsRoot: symlinkTarget,
+      installedSkillsRoots: [{ path: symlinkTarget }],
     })
     await expect(service.install()).rejects.toThrow(CliFailure)
     try {
@@ -356,7 +357,7 @@ describe("SkillsInstallService", () => {
     } as SkillCatalog
     const service = new SkillsInstallService(catalog, {
       packageRoot,
-      installedSkillsRoot: installedRoot,
+      installedSkillsRoots: [{ path: installedRoot }],
     })
 
     await expect(service.install()).resolves.toMatchObject({ exitCode: 0 })
@@ -493,5 +494,221 @@ describe("SkillsInstallService", () => {
     const files = await listDir(sharedDir, { recursive: true })
     const tmpFiles = files.filter((f) => f.endsWith(".tmp"))
     expect(tmpFiles).toHaveLength(0)
+  })
+
+  describe("multiple install roots (~/.agents/skills + ~/.claude/skills)", () => {
+    async function multiRootFixture() {
+      const { packageRoot, installedRoot: agentsRoot } = await fixture()
+      const home = join(agentsRoot, "..", "home")
+      await mkdir(home, { mode: 0o755 })
+      if (process.platform !== "win32") await chmod(home, 0o755)
+      const claudeRoot = join(home, ".claude", "skills")
+      const service = new SkillsInstallService(new SkillCatalog(packageRoot), {
+        packageRoot,
+        installedSkillsRoots: [{ path: agentsRoot }, { path: claudeRoot }],
+      })
+      const serviceFor = (specs: Array<SkillsRootSpec>) =>
+        new SkillsInstallService(new SkillCatalog(packageRoot), {
+          packageRoot,
+          installedSkillsRoots: specs,
+        })
+      return { home, agentsRoot, claudeRoot, service, serviceFor }
+    }
+
+    async function downgrade(skillDir: string, version: string) {
+      const shellPath = join(skillDir, "SKILL.md")
+      const manifestPath = join(skillDir, "skill-manifest.json")
+      const shell = (await readFile(shellPath, "utf8")).replace(
+        /version: "[^"]+"/,
+        `version: "${version}"`
+      )
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+        version: string
+        shellSha256: string
+      }
+      manifest.version = version
+      manifest.shellSha256 = sha256SkillText(shell)
+      await writeFile(shellPath, shell)
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    }
+
+    async function captureFailure(promise: Promise<unknown>) {
+      try {
+        await promise
+      } catch (error) {
+        expect(error).toBeInstanceOf(CliFailure)
+        return error as CliFailure
+      }
+      throw new Error("expected install to fail")
+    }
+
+    it("keeps installing other roots when one root is a symlink, then reports per-root outcome", async () => {
+      const { home, agentsRoot, claudeRoot, service } = await multiRootFixture()
+      const realClaudeSkills = join(home, "dotfiles-skills")
+      await mkdir(realClaudeSkills)
+      await mkdir(join(home, ".claude"))
+      await symlink(realClaudeSkills, claudeRoot)
+
+      const failure = await captureFailure(service.install())
+
+      expect(failure.exitCode).toBe(1)
+      expect(failure.message).toContain(`${agentsRoot}: Installed:`)
+      expect(failure.message).toContain(`${claudeRoot}: FAILED`)
+      const envelope = failure.envelope as unknown as {
+        ok: false
+        error: { details: { targets: Array<{ root: string; error: string | null }> } }
+      }
+      expect(envelope.error.details.targets).toMatchObject([
+        { root: agentsRoot, error: null },
+        { root: claudeRoot },
+      ])
+      expect(envelope.error.details.targets[1]!.error).toMatch(/symbolic link/)
+      for (const name of ["adrate-shared", "adrate-ads"]) {
+        expect(
+          (await lstat(join(agentsRoot, name, "skill-manifest.json"))).isFile()
+        ).toBe(true)
+      }
+      await expect(lstat(join(realClaudeSkills, "adrate-ads"))).rejects.toThrow()
+    })
+
+    it("still installs the second root when the first root is unusable, and a rerun converges", async () => {
+      const { home, agentsRoot, claudeRoot, service } = await multiRootFixture()
+      await mkdir(join(agentsRoot, ".."), { recursive: true })
+      await writeFile(agentsRoot, "not a directory")
+
+      const failure = await captureFailure(service.install())
+      expect(failure.message).toContain(`${agentsRoot}: FAILED`)
+      expect(
+        (await lstat(join(claudeRoot, "adrate-ads", "SKILL.md"))).isFile()
+      ).toBe(true)
+
+      await rm(agentsRoot)
+      const outcome = await service.install()
+      expect(outcome.exitCode).toBe(0)
+      if (!outcome.envelope.ok) throw new Error("expected success")
+      const targets = (
+        outcome.envelope.data as {
+          targets: Array<{ root: string; skills: Array<{ status: string }> }>
+        }
+      ).targets
+      expect(targets.map((t) => t.skills.map((x) => x.status))).toEqual([
+        ["installed", "installed"],
+        ["unchanged", "unchanged"],
+      ])
+      expect(home).toBeTruthy()
+    })
+
+    it("skips a client root whose client directory does not exist, and picks it up once it does", async () => {
+      const { home, agentsRoot, claudeRoot, serviceFor } =
+        await multiRootFixture()
+      const service = serviceFor([
+        { path: agentsRoot },
+        { path: claudeRoot, activeWhenDirExists: join(home, ".claude") },
+      ])
+
+      const first = await service.install()
+      if (!first.envelope.ok) throw new Error("expected success")
+      expect(
+        (first.envelope.data as { targets: Array<{ root: string }> }).targets.map(
+          (t) => t.root
+        )
+      ).toEqual([agentsRoot])
+      await expect(lstat(join(home, ".claude"))).rejects.toThrow()
+
+      await mkdir(join(home, ".claude"))
+      await service.install()
+      expect(
+        (await lstat(join(claudeRoot, "adrate-shared", "SKILL.md"))).isFile()
+      ).toBe(true)
+    })
+
+    it("auto-upgrade isolates a broken Skill dir in one root from the other root", async () => {
+      if (process.platform === "win32") return
+      const { home, agentsRoot, claudeRoot, service } = await multiRootFixture()
+      await mkdir(join(home, ".claude"))
+      await service.install()
+      // agents 根下的 adrate-ads 被换成软链（checkExisting 会抛错）
+      const elsewhere = join(home, "elsewhere")
+      await mkdir(elsewhere)
+      await rm(join(agentsRoot, "adrate-ads"), { recursive: true })
+      await symlink(elsewhere, join(agentsRoot, "adrate-ads"))
+      await downgrade(join(claudeRoot, "adrate-ads"), "0.9.0")
+
+      await service.upgradeInstalled(["adrate-ads"])
+
+      const shell = await readFile(join(claudeRoot, "adrate-ads", "SKILL.md"), "utf8")
+      expect(shell).not.toContain('version: "0.9.0"')
+    })
+
+    it("installs both Skills into every root and reports per-root targets", async () => {
+      const { agentsRoot, claudeRoot, service } = await multiRootFixture()
+      const outcome = await service.install()
+
+      expect(outcome.exitCode).toBe(0)
+      for (const root of [agentsRoot, claudeRoot]) {
+        for (const name of ["adrate-shared", "adrate-ads"]) {
+          expect(
+            (await lstat(join(root, name, "skill-manifest.json"))).isFile()
+          ).toBe(true)
+        }
+      }
+      if (!outcome.envelope.ok) throw new Error("expected success")
+      const data = outcome.envelope.data as {
+        skills: Array<{ name: string; status: string }>
+        targets: Array<{ root: string; skills: Array<{ status: string }> }>
+      }
+      expect(data.skills.map((s) => s.name)).toEqual([
+        "adrate-shared",
+        "adrate-ads",
+      ])
+      expect(data.targets.map((t) => t.root)).toEqual([agentsRoot, claudeRoot])
+    })
+
+    it("fills a missing root while the other is unchanged, and merges status per Skill", async () => {
+      const { agentsRoot, claudeRoot, service } = await multiRootFixture()
+      await new SkillsInstallService(
+        new SkillCatalog(join(agentsRoot, "..", "package")),
+        {
+          packageRoot: join(agentsRoot, "..", "package"),
+          installedSkillsRoots: [{ path: agentsRoot }],
+        }
+      ).install()
+
+      const outcome = await service.install()
+      if (!outcome.envelope.ok) throw new Error("expected success")
+      const data = outcome.envelope.data as {
+        skills: Array<{ status: string }>
+        targets: Array<{ root: string; skills: Array<{ status: string }> }>
+      }
+      expect(data.targets[0]!.skills.map((s) => s.status)).toEqual([
+        "unchanged",
+        "unchanged",
+      ])
+      expect(data.targets[1]!.skills.map((s) => s.status)).toEqual([
+        "installed",
+        "installed",
+      ])
+      expect(data.skills.map((s) => s.status)).toEqual([
+        "installed",
+        "installed",
+      ])
+      expect(outcome.humanOutput?.value).toContain(claudeRoot)
+    })
+
+    it("never tightens permissions of pre-existing ancestors like $HOME", async () => {
+      if (process.platform === "win32") return
+      const { home, claudeRoot, service } = await multiRootFixture()
+      await service.install()
+
+      expect((await lstat(home)).mode & 0o7777).toBe(0o755)
+      expect((await lstat(join(home, ".claude"))).mode & 0o7777).toBe(0o700)
+      expect((await lstat(claudeRoot)).mode & 0o7777).toBe(0o700)
+    })
+
+    it("auto-upgrade only touches roots where the Skill already exists", async () => {
+      const { claudeRoot, service } = await multiRootFixture()
+      await service.upgradeInstalled(["adrate-shared", "adrate-ads"])
+      await expect(lstat(join(claudeRoot, ".."))).rejects.toThrow()
+    })
   })
 })

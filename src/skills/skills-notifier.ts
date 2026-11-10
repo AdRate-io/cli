@@ -8,11 +8,13 @@ import {
 } from "./skill-contract.js"
 import { SkillPathReader } from "./skill-path-reader.js"
 import { BundledSkillCorruptError } from "./skill-catalog.js"
+import { activeSkillsRoots } from "./skills-roots.js"
 import type { CliEnvelope } from "../contracts/envelope.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { CliOutcome } from "../errors.js"
 import type { SkillCatalog } from "./skill-catalog.js"
 import type { SkillsInstallService } from "./skills-install-service.js"
+import type { SkillsRootSpec } from "./skills-roots.js"
 import type {
   SkillFrontmatter,
   SkillManifest,
@@ -49,7 +51,18 @@ export interface SkillsNotifierInspection {
 /** 自动升级器：只升级已安装的 Skill，由 SkillsInstallService 实现 */
 export type SkillsAutoUpgrader = Pick<SkillsInstallService, "upgradeInstalled">
 
-/** 单个 Skill 的本地安装事实（notifier 与 `skills status` 共用的唯一判定） */
+/** 单个 Skill 在某一个安装根目录下的事实 */
+export interface SkillRootFact {
+  root: string
+  installedVersion: string | null
+  state: SkillInstallFact["state"]
+}
+
+/**
+ * 单个 Skill 的本地安装事实（notifier 与 `skills status` 共用的唯一判定）。
+ * 多个安装根目录合并为最需要处理的那一个：missing > outdated > current > newer，
+ * 任一目录缺失或过期都会提示，逐目录明细在 roots。
+ */
 export interface SkillInstallFact {
   name: SkillName
   bundledVersion: string
@@ -59,7 +72,13 @@ export interface SkillInstallFact {
   installedMinCliVersion: string | null
   /** current = 与包内一致；newer = 已安装的更高版本（由更新的 CLI 装入，不降级） */
   state: "current" | SkillsIssueCode | "newer"
+  roots: Array<SkillRootFact>
 }
+
+type SingleRootFact = Omit<SkillInstallFact, "roots">
+
+const STATE_ATTENTION_RANK: Readonly<Record<SkillInstallFact["state"], number>> =
+  { missing: 0, outdated: 1, current: 2, newer: 3 }
 
 interface InstalledSkill {
   shell: SkillFrontmatter
@@ -91,18 +110,19 @@ export class SkillsNotifier {
   constructor(
     private readonly options: {
       catalog: SkillCatalog
-      installedSkillsRoot: string
+      installedSkillsRoots: ReadonlyArray<SkillsRootSpec>
       environment: NodeJS.ProcessEnv
       /** 未注入时不做自动升级（只提示） */
       upgrader?: SkillsAutoUpgrader
     }
   ) {}
 
-  private async installed(name: SkillName): Promise<InstalledSkill | null> {
+  private async installed(
+    root: string,
+    name: SkillName
+  ): Promise<InstalledSkill | null> {
     try {
-      const reader = new SkillPathReader(
-        join(this.options.installedSkillsRoot, name)
-      )
+      const reader = new SkillPathReader(join(root, name))
       const [shellFile, manifestFile] = await Promise.all([
         reader.read("SKILL.md"),
         reader.read("skill-manifest.json"),
@@ -120,7 +140,7 @@ export class SkillsNotifier {
     name: SkillName,
     expected: SkillManifest,
     installed: InstalledSkill | null
-  ): SkillInstallFact {
+  ): SingleRootFact {
     const base = {
       name,
       bundledVersion: expected.version,
@@ -159,11 +179,31 @@ export class SkillsNotifier {
     const byName = new Map(
       manifests.map((manifest) => [manifest.name, manifest])
     )
+    const roots = await activeSkillsRoots(this.options.installedSkillsRoots)
     const facts: Array<SkillInstallFact> = []
     for (const name of SKILL_NAMES) {
       const expected = byName.get(name)
       if (!expected) throw new BundledSkillCorruptError()
-      facts.push(this.factFor(name, expected, await this.installed(name)))
+      const perRoot: Array<SingleRootFact & { root: string }> = []
+      for (const root of roots) {
+        perRoot.push({
+          root,
+          ...this.factFor(name, expected, await this.installed(root, name)),
+        })
+      }
+      const [primary] = [...perRoot].sort(
+        (a, b) => STATE_ATTENTION_RANK[a.state] - STATE_ATTENTION_RANK[b.state]
+      )
+      if (!primary) throw new Error("No installed Skills root configured.")
+      const { root: _root, ...merged } = primary
+      facts.push({
+        ...merged,
+        roots: perRoot.map((fact) => ({
+          root: fact.root,
+          installedVersion: fact.installedVersion,
+          state: fact.state,
+        })),
+      })
     }
     return facts
   }
@@ -186,17 +226,25 @@ export class SkillsNotifier {
       const upgraded = await this.tryUpgrade(facts, options.autoUpgrade === true)
       if (upgraded.attempted) facts = await this.facts()
 
+      // 按「Skill × 根目录」核对：升级前 outdated、升级后重读为 current 才算升级成功
       const upgradedLines = upgraded.before
-        .map((before) => {
-          const after = facts.find((fact) => fact.name === before.name)
-          return after && after.state === "current"
-            ? `${before.name} ${before.installedVersion ?? "?"} -> ${after.installedVersion ?? "?"}`
-            : null
-        })
+        .flatMap((before) =>
+          before.roots
+            .filter((root) => root.state === "outdated")
+            .map((root) => {
+              const after = facts
+                .find((fact) => fact.name === before.name)
+                ?.roots.find((candidate) => candidate.root === root.root)
+              return after && after.state === "current"
+                ? `${before.name} ${root.installedVersion ?? "?"} -> ${after.installedVersion ?? "?"}`
+                : null
+            })
+        )
         .filter((line): line is string => line !== null)
+      const uniqueUpgradedLines = [...new Set(upgradedLines)]
       const upgradeWarning =
-        upgradedLines.length > 0
-          ? `AdRate Agent Skills were updated automatically (${upgradedLines.join(", ")}).`
+        uniqueUpgradedLines.length > 0
+          ? `AdRate Agent Skills were updated automatically (${uniqueUpgradedLines.join(", ")}).`
           : null
 
       const issues: Array<SkillsNoticeIssue> = facts
@@ -239,7 +287,10 @@ export class SkillsNotifier {
     facts: ReadonlyArray<SkillInstallFact>,
     allowed: boolean
   ): Promise<{ attempted: boolean; before: ReadonlyArray<SkillInstallFact> }> {
-    const outdated = facts.filter((fact) => fact.state === "outdated")
+    // 合并状态可能被另一目录的 missing 盖住，必须按逐目录状态找 outdated
+    const outdated = facts.filter((fact) =>
+      fact.roots.some((root) => root.state === "outdated")
+    )
     const upgrader = this.options.upgrader
     if (!allowed || !upgrader || outdated.length === 0) {
       return { attempted: false, before: [] }

@@ -92,7 +92,7 @@ describe("production runtime Skills entry", () => {
     const runtime = createCliRuntime({
       root: join(root, "state"),
       packageRoot: CLI_ROOT,
-      installedSkillsRoot: installed,
+      installedSkillsRoots: [{ path: installed }],
       credentialStore: new CredentialStore(keychain, fallback),
       transport,
       progress: () => undefined,
